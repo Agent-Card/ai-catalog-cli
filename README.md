@@ -180,7 +180,7 @@ ai-catalog search -n 5 embeddings               # limit to 5 results
 ```
 
 Matches against `identifier`, `displayName`, `description`, and `tags`.
-Default limit is 20.
+Default limit is 50.
 
 ---
 

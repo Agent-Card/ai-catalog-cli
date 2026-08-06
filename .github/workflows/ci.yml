@@ -1,3 +1,6 @@
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
 name: CI
 
 on:
@@ -21,17 +24,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: 1.95.0
-          components: clippy,rustfmt
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install just
         uses: taiki-e/install-action@6155d2cb312b464292646e69dce00eee78f23151
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
 
       - name: Build
         run: just build
@@ -49,20 +46,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: 1.95.0
-          components: llvm-tools-preview
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
 
       - name: Install just
         uses: taiki-e/install-action@6155d2cb312b464292646e69dce00eee78f23151
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@e5de28abeb52d916c5e5875d54b21a9e738b61ec
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
 
       - name: Run coverage
         run: |

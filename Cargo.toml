@@ -24,7 +24,6 @@ ai-catalog-trust = "0.1.0"
 ai-catalog-validate = "0.1.0"
 async-recursion = "1"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
 colored = "2"
 dirs = "5"
 hex = "0.4"
