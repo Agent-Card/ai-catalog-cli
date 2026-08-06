@@ -13,6 +13,27 @@ The crate is named `ai-catalog-cli`; the installed binary is `ai-catalog`.
 
 ## Install
 
+Prebuilt binaries for Linux, macOS, and Windows are attached to each
+[release](https://github.com/agntcy/ai-catalog-cli/releases). Download the
+archive for your platform, verify it against the accompanying `.sha256` file,
+and place `ai-catalog` on your `PATH`:
+
+```sh
+VERSION=v0.1.0
+NAME=ai-catalog-darwin-arm64   # see the release page for other platforms
+BASE=https://github.com/agntcy/ai-catalog-cli/releases/download/$VERSION
+
+curl -fsSLO "$BASE/$NAME.tar.gz" -O "$BASE/$NAME.sha256"
+shasum -a 256 -c "$NAME.sha256"
+tar -xzf "$NAME.tar.gz"
+install -m 0755 ai-catalog /usr/local/bin/
+```
+
+Linux archives come in `gnu` (glibc 2.28 or newer) and `musl` (statically
+linked) flavours; pick `musl` for Alpine or other non-glibc distributions.
+
+With a Rust toolchain installed:
+
 ```sh
 cargo install ai-catalog-cli
 ```

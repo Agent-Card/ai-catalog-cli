@@ -1,0 +1,78 @@
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+---
+name: ci-release-binaries
+
+# release-plz creates the tag and the GitHub release; this only attaches assets.
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-binaries:
+    name: "${{ matrix.platform.target }}"
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu.2.28
+            archive: linux-amd64-gnu
+            build-tool: cargo-zigbuild
+          - runner: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu.2.28
+            archive: linux-arm64-gnu
+            build-tool: cargo-zigbuild
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            archive: linux-amd64-musl
+            build-tool: cargo-zigbuild
+          - runner: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            archive: linux-arm64-musl
+            build-tool: cargo-zigbuild
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: windows-amd64
+            build-tool: cargo
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: windows-arm64
+            build-tool: cargo
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: darwin-amd64
+            build-tool: cargo
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            archive: darwin-arm64
+            build-tool: cargo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Build and upload
+        uses: taiki-e/upload-rust-binary-action@0e34102c043ded9f2ca39f7af5cd99a540c61aff # v1.29.1
+        with:
+          bin: ai-catalog
+          target: ${{ matrix.platform.target }}
+          archive: ai-catalog-${{ matrix.platform.archive }}
+          build-tool: ${{ matrix.platform.build-tool }}
+          tar: unix
+          zip: windows
+          checksum: sha256
+          include: LICENSE,README.md
+          token: ${{ secrets.GITHUB_TOKEN }}
