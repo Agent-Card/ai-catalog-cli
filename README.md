@@ -52,6 +52,22 @@ cargo run -- help
 cargo run -- version
 ```
 
+## Agent skill
+
+[`SKILL.md`](SKILL.md) follows the [Agent Skills standard](https://agentskills.io)
+and teaches an AI agent to use this CLI to discover, inspect, and install AI
+artifacts from a catalog. It requires the `ai-catalog` binary on `PATH`.
+
+Each skill is loaded from a directory named after it, so install it as:
+
+```sh
+mkdir -p ~/.agents/skills/ai-catalog-cli
+cp SKILL.md ~/.agents/skills/ai-catalog-cli/
+```
+
+`~/.agents/skills/` is read by Cursor, Copilot, VS Code, Codex, and Gemini CLI.
+For Claude Code, use `~/.claude/skills/` instead.
+
 ## Development
 
 ```sh
@@ -81,15 +97,15 @@ ai-catalog oci unpack-layout [--ref-name <name>] <layout-dir>
 ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <target>
 ai-catalog oci add <name> <layout-dir> [--ref-name <tag>]
 ai-catalog oci search [--regex] [-n <limit>] [--json] <keyword>
-ai-catalog oci show [--json] <identifier>
-ai-catalog oci pull [--output <path>] <identifier>
+ai-catalog oci show [--json] [--media-type <type>] <identifier>
+ai-catalog oci pull [--output <path>] [--media-type <type>] <identifier>
 ai-catalog catalog add <name> <url>
 ai-catalog catalog list [--json]
 ai-catalog catalog remove <name-or-url>
 ai-catalog catalog update <name>
 ai-catalog search [--regex] [-n <limit>] [--json] <keyword>
-ai-catalog show [--scope <catalog-name>] [--json] <identifier>
-ai-catalog pull [--output <path>] <identifier>
+ai-catalog show [--scope <catalog-name-or-url>] [--json] [--media-type <type>] <identifier>
+ai-catalog pull [--output <path>] [--scope <catalog-name-or-url>] [--media-type <type>] <identifier>
 ai-catalog help
 ai-catalog version
 ```
@@ -213,7 +229,17 @@ Shows full details of a single catalog entry by identifier.
 ai-catalog show urn:example:agent:v1
 ai-catalog show --json urn:example:agent:v1
 ai-catalog show --scope my-registry urn:example:agent:v1  # restrict to one catalog
+ai-catalog show --scope https://example.com/ai-catalog.json urn:example:agent:v1
+ai-catalog show --media-type application/json urn:example:catalog:nested
 ```
+
+`--scope` accepts a registered catalog name or a URI. `file://` URIs are read
+from disk; `http://` and `https://` URIs are fetched and cached on the fly
+without registering the catalog.
+
+For an entry that is itself a nested catalog, `--media-type` resolves its
+children and shows the single child of that type. Omitting it, or passing
+`application/ai-catalog+json`, shows the catalog entry itself.
 
 ---
 
@@ -228,11 +254,24 @@ registry.
 ai-catalog pull urn:example:data:dataset-v1
 ai-catalog pull --output ./downloads urn:example:data:dataset-v1
 ai-catalog pull --output ./report.json urn:example:data:dataset-v1
+ai-catalog pull --output - urn:example:data:dataset-v1   # stream to stdout
+ai-catalog pull --scope https://example.com/ai-catalog.json urn:example:agent:v1
 ```
 
 If `--output` is a directory, a filename is derived from the identifier. If it
-is a file path, that path is used directly. Omitting `--output` writes to the
-current directory.
+is a file path, that path is used directly. `-` streams the artifact bytes to
+stdout. Omitting `--output` writes to the current directory.
+
+`--scope` follows the same name-or-URI rules as `show`.
+
+When the identifier resolves to a nested catalog entry
+(`application/ai-catalog+json`), `--media-type` is required:
+
+| `--media-type` | Result |
+|---|---|
+| `application/ai-catalog+json` | Writes the catalog JSON document itself |
+| any other type | Pulls the single child entry of that type; errors on 0 or more than 1 match |
+| omitted | Errors, suggesting `--media-type` |
 
 ---
 
@@ -374,11 +413,13 @@ ai-catalog oci search -n 10 agent
 
 ### `oci show`
 
-Shows full details of an entry from OCI-sourced catalogs only.
+Shows full details of an entry from OCI-sourced catalogs only. Accepts the same
+`--media-type` flag as `show`.
 
 ```sh
 ai-catalog oci show urn:ai-catalog:oci:abc12345
 ai-catalog oci show --json urn:ai-catalog:oci:abc12345
+ai-catalog oci show --media-type application/json urn:ai-catalog:oci:abc12345
 ```
 
 ---
@@ -386,11 +427,12 @@ ai-catalog oci show --json urn:ai-catalog:oci:abc12345
 ### `oci pull`
 
 Pulls an entry from OCI-sourced catalogs to disk. Accepts the same `--output`
-flag as `pull`.
+and `--media-type` flags as `pull`.
 
 ```sh
 ai-catalog oci pull urn:ai-catalog:oci:abc12345
 ai-catalog oci pull --output ./artifact.json urn:ai-catalog:oci:abc12345
+ai-catalog oci pull --media-type application/json urn:ai-catalog:oci:abc12345
 ```
 
 ---
