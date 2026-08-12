@@ -1,0 +1,49 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "Acme Engineering Department",
+    "identifier": "did:web:engineering.acme-corp.com",
+    "documentationUrl": "https://engineering.acme-corp.com/catalog"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:acme-corp.com:mcp:build-tools",
+      "type": "application/mcp-server-card+json",
+      "description": "MCP server exposing CI/CD build pipeline tools.",
+      "tags": ["ci", "build", "engineering"],
+      "url": "https://engineering.acme-corp.com/mcp/build-tools-card.json",
+      "updatedAt": "2026-08-01T10:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    },
+    {
+      "identifier": "urn:air:acme-corp.com:skill:code-review",
+      "displayName": "Code Review Skill",
+      "type": "application/agent-skills+md",
+      "description": "Agent skill for automated code review and PR feedback.",
+      "tags": ["code-review", "engineering", "skill"],
+      "url": "https://engineering.acme-corp.com/skills/code-review.md",
+      "updatedAt": "2026-08-05T09:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    },
+    {
+      "identifier": "urn:air:acme-corp.com:skill:incident-response",
+      "displayName": "Incident Response Skill",
+      "type": "application/agent-skills+zip",
+      "description": "Agent skill bundle for on-call incident triage and runbook execution.",
+      "tags": ["incident", "on-call", "engineering", "skill"],
+      "url": "https://engineering.acme-corp.com/skills/incident-response.zip",
+      "version": "2.1.0",
+      "updatedAt": "2026-07-20T14:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    }
+  ]
+}

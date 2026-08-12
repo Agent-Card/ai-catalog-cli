@@ -8,6 +8,17 @@ use ai_catalog::AiCatalog;
 
 use crate::error::{Error, Result};
 
+/// If `url` has no scheme (i.e. is a bare path), resolve it to an absolute
+/// `file://` URI so callers always work with a stable, scheme-bearing string.
+pub fn local_path_to_file_url(url: &str) -> Result<String> {
+    if url.contains("://") {
+        return Ok(url.to_string());
+    }
+    let abs = std::fs::canonicalize(url)
+        .map_err(|e| Error::Other(format!("cannot resolve path \"{url}\": {e}")))?;
+    Ok(format!("file://{}", abs.display()))
+}
+
 pub fn build_client() -> Result<Client> {
     Client::builder()
         .user_agent(format!("ai-catalog/{}", env!("CARGO_PKG_VERSION")))

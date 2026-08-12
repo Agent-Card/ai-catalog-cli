@@ -7,10 +7,12 @@ use ai_catalog::CatalogEntry;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::fetch::build_client;
+use crate::fetch::{build_client, local_path_to_file_url};
 use crate::resolver::{make_entry_metadata, resolve_and_cache};
 
 pub async fn execute(name: &str, url: &str) -> Result<()> {
+    let url = local_path_to_file_url(url)?;
+    let url = url.as_str();
     let cache = CacheManager::new()?;
     cache.ensure_dirs()?;
     let client = build_client()?;

@@ -120,6 +120,15 @@ impl CacheManager {
     pub fn object_file_url(&self, hash: &str) -> String {
         format!("file://{}", self.object_path(hash).display())
     }
+
+    /// If `path` is inside the objects directory, return the hash (filename stem).
+    pub fn hash_from_object_path<'a>(&self, path: &'a str) -> Option<&'a str> {
+        let objects = self.objects_dir();
+        let objects_str = objects.to_string_lossy();
+        let prefix = format!("{}/", objects_str);
+        let rel = path.strip_prefix(prefix.as_str())?;
+        rel.strip_suffix(".json")
+    }
 }
 
 /// Compute the SHA-256 hex digest of a byte slice.

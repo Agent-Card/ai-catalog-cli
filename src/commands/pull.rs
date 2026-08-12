@@ -161,6 +161,12 @@ fn catalog_leaf_entries_for_entry(
     entry: &CatalogEntry,
     cache: &CacheManager,
 ) -> Result<Vec<crate::resolver::ResolvedEntry>> {
+    if let Some(data) = &entry.data {
+        let catalog: AiCatalog = serde_json::from_value(data.clone())?;
+        let source_url = format!("inline:{}", entry.identifier);
+        return resolve_catalog_leaf_entries(&catalog, &source_url, cache);
+    }
+
     let file_url = entry.url.as_deref().ok_or_else(|| {
         Error::Other(format!("catalog entry \"{}\" has no URL", entry.identifier))
     })?;
@@ -225,18 +231,21 @@ async fn write_catalog_entry(
     output_path: Option<&str>,
     _cache: &CacheManager,
 ) -> Result<()> {
-    let file_url = entry
-        .url
-        .as_deref()
-        .ok_or_else(|| Error::Other(format!("entry \"{}\" has no URL", entry.identifier)))?;
-
-    let path = file_url.strip_prefix("file://").unwrap_or(file_url);
-    let bytes = std::fs::read(path).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            e.kind(),
-            format!("cannot read cached catalog at {file_url}: {e}"),
-        ))
-    })?;
+    let bytes = if let Some(data) = &entry.data {
+        serde_json::to_vec_pretty(data)?
+    } else {
+        let file_url = entry
+            .url
+            .as_deref()
+            .ok_or_else(|| Error::Other(format!("entry \"{}\" has no URL", entry.identifier)))?;
+        let path = file_url.strip_prefix("file://").unwrap_or(file_url);
+        std::fs::read(path).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("cannot read cached catalog at {file_url}: {e}"),
+            ))
+        })?
+    };
 
     if output_path == Some("-") {
         use std::io::Write;

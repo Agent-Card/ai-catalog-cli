@@ -141,6 +141,12 @@ fn catalog_leaf_entries_for_entry(
     entry: &CatalogEntry,
     cache: &CacheManager,
 ) -> Result<Vec<crate::resolver::ResolvedEntry>> {
+    if let Some(data) = &entry.data {
+        let catalog: AiCatalog = serde_json::from_value(data.clone())?;
+        let source_url = format!("inline:{}", entry.identifier);
+        return resolve_catalog_leaf_entries(&catalog, &source_url, cache);
+    }
+
     let file_url = entry.url.as_deref().ok_or_else(|| {
         Error::Other(format!("catalog entry \"{}\" has no URL", entry.identifier))
     })?;
@@ -226,23 +232,31 @@ pub(crate) fn print_entry_table(entry: &CatalogEntry, cache: &CacheManager) {
 }
 
 fn print_nested_catalog_entries(entry: &CatalogEntry, cache: &CacheManager) {
-    let file_url = match &entry.url {
-        Some(u) if u.starts_with("file://") => u.clone(),
-        _ => return,
-    };
-
-    let path = file_url.strip_prefix("file://").unwrap_or(&file_url);
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return,
-    };
-    let catalog: AiCatalog = match serde_json::from_slice(&bytes) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let leaf_entries = match resolve_catalog_leaf_entries(&catalog, &file_url, cache) {
-        Ok(e) => e,
-        Err(_) => return,
+    let leaf_entries = if let Some(data) = &entry.data {
+        let Ok(catalog) = serde_json::from_value::<AiCatalog>(data.clone()) else { return };
+        let source_url = format!("inline:{}", entry.identifier);
+        match resolve_catalog_leaf_entries(&catalog, &source_url, cache) {
+            Ok(e) => e,
+            Err(_) => return,
+        }
+    } else {
+        let file_url = match &entry.url {
+            Some(u) if u.starts_with("file://") => u.clone(),
+            _ => return,
+        };
+        let path = file_url.strip_prefix("file://").unwrap_or(&file_url);
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let catalog: AiCatalog = match serde_json::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        match resolve_catalog_leaf_entries(&catalog, &file_url, cache) {
+            Ok(e) => e,
+            Err(_) => return,
+        }
     };
 
     if leaf_entries.is_empty() {
