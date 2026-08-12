@@ -1,0 +1,102 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "Acme Corp AI Catalog",
+    "identifier": "did:web:acme-corp.com",
+    "documentationUrl": "https://docs.acme-corp.com/ai-catalog",
+    "logoUrl": "https://acme-corp.com/logo.png"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:acme-corp.com:mcp:knowledge-base",
+      "type": "application/mcp-server-card+json",
+      "description": "MCP server providing access to the Acme internal knowledge base and documentation search.",
+      "tags": ["knowledge", "search", "mcp"],
+      "url": "https://catalog.acme-corp.com/mcp/knowledge-base-card.json",
+      "updatedAt": "2026-08-01T08:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    },
+    {
+      "identifier": "urn:air:acme-corp.com:a2a:customer-support",
+      "type": "application/a2a-agent-card+json",
+      "description": "A2A agent handling customer support ticket triage and resolution routing.",
+      "tags": ["customer-support", "a2a", "triage"],
+      "url": "https://catalog.acme-corp.com/agents/customer-support.json",
+      "updatedAt": "2026-08-03T12:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    },
+    {
+      "identifier": "urn:air:acme-corp.com:skill:summarization",
+      "displayName": "Document Summarization Skill",
+      "type": "application/agent-skills+md",
+      "description": "Agent skill for summarizing long documents, meeting notes, and reports.",
+      "tags": ["summarization", "nlp", "skill"],
+      "url": "https://catalog.acme-corp.com/skills/summarization.md",
+      "updatedAt": "2026-07-15T10:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    },
+    {
+      "identifier": "urn:air:acme-corp.com:catalog:engineering",
+      "displayName": "Acme Engineering Department Catalog",
+      "type": "application/ai-catalog+json",
+      "description": "Nested catalog for the Acme Engineering department — CI/CD tools, code review skills, and on-call agents.",
+      "tags": ["engineering", "internal", "nested"],
+      "url": "./department-catalog.json",
+      "updatedAt": "2026-08-05T09:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      }
+    },
+    {
+      "identifier": "urn:air:acme-corp.com:agent:finance",
+      "displayName": "Acme Finance Agent",
+      "type": "application/ai-catalog+json",
+      "description": "Finance agent accessible via both A2A and MCP protocols. Use the inner entries to connect via your preferred protocol.",
+      "tags": ["finance", "trading", "dual-protocol", "a2a", "mcp"],
+      "updatedAt": "2026-08-10T14:00:00Z",
+      "publisher": {
+        "identifier": "did:web:acme-corp.com",
+        "displayName": "Acme Corp"
+      },
+      "trustManifest": {
+        "identity": "did:web:acme-corp.com",
+        "identityType": "did",
+        "attestations": [
+          {
+            "type": "SOC2-Type2",
+            "uri": "https://trust.acme-corp.com/reports/soc2-2026.pdf",
+            "digest": "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890",
+            "size": 245760
+          }
+        ]
+      },
+      "data": {
+        "specVersion": "1.0",
+        "entries": [
+          {
+            "identifier": "urn:air:acme-corp.com:a2a:finance",
+            "type": "application/a2a-agent-card+json",
+            "description": "A2A endpoint for the Acme Finance Agent.",
+            "url": "https://api.acme-corp.com/agents/finance.json"
+          },
+          {
+            "identifier": "urn:air:acme-corp.com:mcp:finance",
+            "type": "application/mcp-server-card+json",
+            "description": "MCP endpoint for the Acme Finance Agent.",
+            "url": "https://api.acme-corp.com/mcp/finance-card.json"
+          }
+        ]
+      }
+    }
+  ]
+}

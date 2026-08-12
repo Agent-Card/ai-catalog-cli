@@ -3,19 +3,14 @@
 
 use colored::Colorize;
 
-use ai_catalog::{AiCatalog, CatalogEntry};
+use ai_catalog::CatalogEntry;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::fetch::build_client;
-use crate::resolver::{
-    find_entry_by_id_in_registry, find_entry_by_id_in_url, resolve_and_cache,
-    resolve_catalog_leaf_entries,
-};
+use crate::resolver::{catalog_leaf_entries_for_entry, find_entry_by_id_in_registry};
 
-use super::OutputFormat;
-
-const CATALOG_MIME_TYPE: &str = "application/ai-catalog+json";
+use super::{CATALOG_MIME_TYPE, OutputFormat, find_entry_in_scope};
 
 /// Show full details of a catalog entry by identifier.
 ///
@@ -84,76 +79,6 @@ pub(crate) async fn dispatch_show_entry(
             }
         }
     }
-}
-
-/// Resolve an entry within a specific scope (registered name or URI).
-async fn find_entry_in_scope(
-    identifier: &str,
-    scope: &str,
-    cache: &CacheManager,
-    client: &reqwest::Client,
-) -> Result<Option<CatalogEntry>> {
-    if scope.contains("://") {
-        // Treat as a URI
-        if scope.starts_with("file://") {
-            find_entry_by_id_in_url(identifier, scope, cache)
-        } else {
-            // http/https — fetch and cache, then search
-            cache.ensure_dirs()?;
-            resolve_and_cache(scope, client, cache).await?;
-            let url_to_hash = cache.read_refs()?;
-            if let Some(hash) = url_to_hash.get(scope) {
-                find_entry_by_id_in_url(identifier, &cache.object_file_url(hash), cache)
-            } else {
-                Ok(None)
-            }
-        }
-    } else {
-        // Treat as a registered catalog name or sourceUrl metadata
-        let registry = cache.read_registry()?;
-        let catalog_entry = registry.entries.iter().find(|e| {
-            e.display_name
-                .as_deref()
-                .map(|n| n.eq_ignore_ascii_case(scope))
-                .unwrap_or(false)
-                || e.metadata
-                    .as_ref()
-                    .and_then(|m| m.get("sourceUrl"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.eq_ignore_ascii_case(scope))
-                    .unwrap_or(false)
-        });
-        let catalog_entry = catalog_entry.ok_or_else(|| {
-            Error::CatalogNotFound(format!(
-                "no catalog matching \"{scope}\" found. Use `ai-catalog catalog list` to see registered catalogs."
-            ))
-        })?;
-        let file_url = catalog_entry
-            .url
-            .as_deref()
-            .ok_or_else(|| Error::Other(format!("catalog \"{scope}\" has no local file URL")))?;
-        find_entry_by_id_in_url(identifier, file_url, cache)
-    }
-}
-
-/// Get the leaf entries of a catalog entry using only the local cache.
-fn catalog_leaf_entries_for_entry(
-    entry: &CatalogEntry,
-    cache: &CacheManager,
-) -> Result<Vec<crate::resolver::ResolvedEntry>> {
-    let file_url = entry.url.as_deref().ok_or_else(|| {
-        Error::Other(format!("catalog entry \"{}\" has no URL", entry.identifier))
-    })?;
-
-    let path = file_url.strip_prefix("file://").unwrap_or(file_url);
-    let bytes = std::fs::read(path).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            e.kind(),
-            format!("cannot read cached catalog at {file_url}: {e}"),
-        ))
-    })?;
-    let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
-    resolve_catalog_leaf_entries(&catalog, file_url, cache)
 }
 
 fn print_entry(entry: &CatalogEntry, output: &OutputFormat, cache: &CacheManager) -> Result<()> {
@@ -226,21 +151,7 @@ pub(crate) fn print_entry_table(entry: &CatalogEntry, cache: &CacheManager) {
 }
 
 fn print_nested_catalog_entries(entry: &CatalogEntry, cache: &CacheManager) {
-    let file_url = match &entry.url {
-        Some(u) if u.starts_with("file://") => u.clone(),
-        _ => return,
-    };
-
-    let path = file_url.strip_prefix("file://").unwrap_or(&file_url);
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return,
-    };
-    let catalog: AiCatalog = match serde_json::from_slice(&bytes) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let leaf_entries = match resolve_catalog_leaf_entries(&catalog, &file_url, cache) {
+    let leaf_entries = match catalog_leaf_entries_for_entry(entry, cache) {
         Ok(e) => e,
         Err(_) => return,
     };
