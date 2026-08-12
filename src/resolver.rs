@@ -193,8 +193,10 @@ pub async fn resolve_local(cache: &CacheManager) -> Result<Vec<ResolvedEntry>> {
     let registry = cache.read_registry()?;
     let url_to_hash = cache.read_refs()?;
     // Invert refs so we can look up the original URL for a cached object hash.
-    let hash_to_url: std::collections::HashMap<String, String> =
-        url_to_hash.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
+    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
     let mut visited: HashSet<String> = HashSet::new();
     let mut entries = Vec::new();
 
@@ -223,8 +225,10 @@ pub fn resolve_local_from_url(file_url: &str, cache: &CacheManager) -> Result<Ve
     let bytes = std::fs::read(path)?;
     let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
     let url_to_hash = cache.read_refs()?;
-    let hash_to_url: std::collections::HashMap<String, String> =
-        url_to_hash.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
+    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
     let mut visited: HashSet<String> = HashSet::new();
     let mut entries = Vec::new();
     visited.insert(file_url.to_string());
@@ -241,6 +245,7 @@ pub fn resolve_local_from_url(file_url: &str, cache: &CacheManager) -> Result<Ve
     Ok(entries)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_local_inner(
     catalog: &AiCatalog,
     source_url: &str,
@@ -287,7 +292,10 @@ fn resolve_local_inner(
                 .strip_prefix("file://")
                 .and_then(|p| cache.hash_from_object_path(p))
             {
-                hash_to_url.get(hash).map(String::as_str).unwrap_or(source_url)
+                hash_to_url
+                    .get(hash)
+                    .map(String::as_str)
+                    .unwrap_or(source_url)
             } else {
                 source_url
             };
@@ -303,9 +311,7 @@ fn resolve_local_inner(
                 cache.object_file_url(hash)
             } else {
                 // Not cached — skip gracefully
-                eprintln!(
-                    "Warning: nested catalog not in local cache, skipping: {resolved_url}"
-                );
+                eprintln!("Warning: nested catalog not in local cache, skipping: {resolved_url}");
                 continue;
             };
 
@@ -393,8 +399,10 @@ pub fn resolve_catalog_leaf_entries(
     cache: &CacheManager,
 ) -> Result<Vec<ResolvedEntry>> {
     let url_to_hash = cache.read_refs()?;
-    let hash_to_url: std::collections::HashMap<String, String> =
-        url_to_hash.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
+    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
     let mut visited = HashSet::new();
     let mut entries = Vec::new();
     visited.insert(source_url.to_string());
@@ -498,8 +506,10 @@ fn search_catalog_for_id(
 pub async fn resolve_local_oci(cache: &CacheManager) -> Result<Vec<ResolvedEntry>> {
     let registry = cache.read_registry()?;
     let url_to_hash = cache.read_refs()?;
-    let hash_to_url: std::collections::HashMap<String, String> =
-        url_to_hash.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
+    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
     let mut visited: HashSet<String> = HashSet::new();
     let mut entries = Vec::new();
 

@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::fetch::build_client;
 use crate::resolver::{catalog_leaf_entries_for_entry, find_entry_by_id_in_registry};
 
-use super::{OutputFormat, CATALOG_MIME_TYPE, find_entry_in_scope};
+use super::{CATALOG_MIME_TYPE, OutputFormat, find_entry_in_scope};
 
 /// Show full details of a catalog entry by identifier.
 ///

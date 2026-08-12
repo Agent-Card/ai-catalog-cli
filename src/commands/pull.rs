@@ -10,7 +10,9 @@ use ai_catalog::CatalogEntry;
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::fetch::build_client;
-use crate::resolver::{catalog_leaf_entries_for_entry, find_entry_by_id_in_registry, resolve_and_cache};
+use crate::resolver::{
+    catalog_leaf_entries_for_entry, find_entry_by_id_in_registry, resolve_and_cache,
+};
 
 use super::{CATALOG_MIME_TYPE, find_entry_in_scope};
 
