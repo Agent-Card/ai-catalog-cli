@@ -411,6 +411,33 @@ pub fn resolve_catalog_leaf_entries(
     Ok(entries)
 }
 
+/// Get the leaf (non-catalog) entries of a catalog-type `CatalogEntry`,
+/// handling both inline `data` and cached `url` sources.
+pub fn catalog_leaf_entries_for_entry(
+    entry: &CatalogEntry,
+    cache: &CacheManager,
+) -> Result<Vec<ResolvedEntry>> {
+    if let Some(data) = &entry.data {
+        let catalog: AiCatalog = serde_json::from_value(data.clone())?;
+        let source_url = format!("inline:{}", entry.identifier);
+        return resolve_catalog_leaf_entries(&catalog, &source_url, cache);
+    }
+
+    let file_url = entry.url.as_deref().ok_or_else(|| {
+        Error::Other(format!("catalog entry \"{}\" has no URL", entry.identifier))
+    })?;
+
+    let path = file_url.strip_prefix("file://").unwrap_or(file_url);
+    let bytes = std::fs::read(path).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            e.kind(),
+            format!("cannot read cached catalog at {file_url}: {e}"),
+        ))
+    })?;
+    let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
+    resolve_catalog_leaf_entries(&catalog, file_url, cache)
+}
+
 fn search_catalog_for_id(
     catalog: &AiCatalog,
     id: &str,
