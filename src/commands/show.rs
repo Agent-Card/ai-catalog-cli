@@ -133,11 +133,11 @@ pub(crate) fn print_entry_table(entry: &CatalogEntry, cache: &CacheManager) {
             );
         }
     }
-    if let Some(meta) = &entry.metadata
-        && !meta.is_empty()
+    if let Some(extensions) = &entry.extensions
+        && !extensions.is_empty()
     {
-        println!("  {}:", "Metadata".bold());
-        for (k, v) in meta {
+        println!("  {}:", "Extensions".bold());
+        for (k, v) in extensions {
             println!("    {}: {}", k, v);
         }
     }

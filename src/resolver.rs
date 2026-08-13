@@ -1,7 +1,7 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use reqwest::Client;
 use serde_json::json;
@@ -575,14 +575,33 @@ pub fn find_entry_by_id_oci(id: &str, cache: &CacheManager) -> Result<Option<Cat
     Ok(None)
 }
 
-/// Retrieve a `serde_json::Value` metadata object for a registry entry.
-pub fn make_entry_metadata(source_url: &str, hash: &str, entry_count: usize) -> serde_json::Value {
-    json!({
-        "sourceUrl": source_url,
-        "lastUpdated": chrono::Utc::now().to_rfc3339(),
-        "contentHash": hash,
-        "entryCount": entry_count,
-    })
+/// Namespace for the CLI's own bookkeeping. The specification requires every
+/// extension key to be a URL or a reverse-DNS string, so the CLI keeps its
+/// fields under one key rather than writing them at the top level.
+pub const CLI_EXTENSION_KEY: &str = "org.agntcy.ai-catalog-cli";
+
+/// Build the `extensions` map the CLI attaches to a registry entry.
+pub fn make_entry_extensions(
+    source_url: &str,
+    hash: &str,
+    entry_count: usize,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut extensions = BTreeMap::new();
+    extensions.insert(
+        CLI_EXTENSION_KEY.to_string(),
+        json!({
+            "sourceUrl": source_url,
+            "lastUpdated": chrono::Utc::now().to_rfc3339(),
+            "contentHash": hash,
+            "entryCount": entry_count,
+        }),
+    );
+    extensions
+}
+
+/// Read the CLI's own extension block from an entry.
+pub fn cli_extension(entry: &CatalogEntry) -> Option<&serde_json::Value> {
+    entry.extensions.as_ref()?.get(CLI_EXTENSION_KEY)
 }
 
 #[cfg(test)]
@@ -607,7 +626,7 @@ mod tests {
             publisher: None,
             trust_manifest: None,
             updated_at: None,
-            metadata: None,
+            extensions: None,
             extra_fields: BTreeMap::new(),
         }
     }
@@ -625,7 +644,7 @@ mod tests {
             publisher: None,
             trust_manifest: None,
             updated_at: None,
-            metadata: None,
+            extensions: None,
             extra_fields: BTreeMap::new(),
         }
     }
@@ -635,18 +654,45 @@ mod tests {
             spec_version: "1.0".to_string(),
             host: None,
             entries,
-            metadata: None,
+            signature: None,
+            extensions: None,
             extra_fields: BTreeMap::new(),
         }
     }
 
     #[test]
-    fn make_entry_metadata_has_expected_keys() {
-        let meta = make_entry_metadata("https://example.com/catalog.json", "deadbeef", 42);
+    fn make_entry_extensions_nests_fields_under_the_cli_key() {
+        let extensions = make_entry_extensions("https://example.com/catalog.json", "deadbeef", 42);
+        assert_eq!(extensions.len(), 1);
+
+        let meta = &extensions[CLI_EXTENSION_KEY];
         assert_eq!(meta["sourceUrl"], "https://example.com/catalog.json");
         assert_eq!(meta["contentHash"], "deadbeef");
         assert_eq!(meta["entryCount"], 42);
         assert!(meta["lastUpdated"].is_string());
+    }
+
+    #[test]
+    fn cli_extension_reads_back_what_make_entry_extensions_wrote() {
+        let mut entry = leaf_entry("urn:test:entry", "application/json");
+        entry.extensions = Some(make_entry_extensions(
+            "https://example.com/catalog.json",
+            "deadbeef",
+            42,
+        ));
+
+        let meta = cli_extension(&entry).expect("the CLI block should be present");
+        assert_eq!(meta["sourceUrl"], "https://example.com/catalog.json");
+    }
+
+    #[test]
+    fn cli_extension_ignores_other_publishers_extensions() {
+        let mut entry = leaf_entry("urn:test:entry", "application/json");
+        let mut extensions = BTreeMap::new();
+        extensions.insert("com.example.other".to_string(), json!({"sourceUrl": "x"}));
+        entry.extensions = Some(extensions);
+
+        assert!(cli_extension(&entry).is_none());
     }
 
     #[test]

@@ -8,7 +8,7 @@ use ai_catalog_oci::{import_layout, unpack_catalog};
 
 use crate::cache::{CacheManager, content_hash};
 use crate::error::{Error, Result};
-use crate::resolver::make_entry_metadata;
+use crate::resolver::{CLI_EXTENSION_KEY, make_entry_extensions};
 
 /// Register a catalog sourced from an OCI image layout.
 ///
@@ -64,8 +64,11 @@ pub async fn execute(name: &str, layout_path: &str, ref_name: Option<&str>) -> R
     let file_url = cache.object_file_url(&hash);
     let identifier = format!("urn:ai-catalog:oci:{}", &hash[..8]);
 
-    let mut meta_val = make_entry_metadata(&source_ref, &hash, entry_count);
-    if let Some(obj) = meta_val.as_object_mut() {
+    let mut extensions = make_entry_extensions(&source_ref, &hash, entry_count);
+    if let Some(obj) = extensions
+        .get_mut(CLI_EXTENSION_KEY)
+        .and_then(|v| v.as_object_mut())
+    {
         obj.insert("sourceType".to_string(), serde_json::json!("oci"));
         obj.insert("ociLayoutPath".to_string(), serde_json::json!(layout_path));
         obj.insert("ociRefName".to_string(), serde_json::json!(tag));
@@ -81,7 +84,7 @@ pub async fn execute(name: &str, layout_path: &str, ref_name: Option<&str>) -> R
         data: None,
         version: None,
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
-        metadata: Some(serde_json::from_value(meta_val).unwrap_or_default()),
+        extensions: Some(extensions),
         publisher: None,
         trust_manifest: None,
         extra_fields: Default::default(),

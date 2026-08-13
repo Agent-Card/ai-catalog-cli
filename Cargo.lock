@@ -13,9 +13,9 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb80d2f92990b786d59ea114ac89fa20bc74240978d3d7d3cbfa6de9f88f03f"
+checksum = "080e665ced580b4a6596c5a32433cb29f01835dc7f28dd485a5700e91960251e"
 dependencies = [
  "regex",
  "serde",
@@ -49,9 +49,9 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog-oci"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f370a5b7849ca65bfc958a7e5da8bdea3fc2f2abfc3e2b3c4d8da3669cf928df"
+checksum = "c6efa8a84420e45fceaba6dac24eb9fe72e1c3ed509533c4d4683a5fda074340"
 dependencies = [
  "ai-catalog",
  "serde",
@@ -62,23 +62,27 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog-trust"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3867dd7eb860b15889859906ef02d61b7a84404b99d409c95f819782262f15a9"
+checksum = "959bb806311aa8ff033faf8f5366a9e1ec167ddb9170158f86a5d95786cd7ca8"
 dependencies = [
  "ai-catalog",
+ "base64",
+ "serde_jcs",
  "serde_json",
  "sha2",
  "thiserror 2.0.19",
+ "time",
 ]
 
 [[package]]
 name = "ai-catalog-validate"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "609739e2f857fab566b65e36568a90794b1336734fee79e80fee44a161d12835"
+checksum = "9a64a1c494c56f18edaa5a4e7c0b689ce51e9325aee3dc9249d9ab809c391765"
 dependencies = [
  "ai-catalog",
+ "regex",
  "serde_json",
  "time",
 ]
@@ -1064,6 +1068,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "ryu-js"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6518fc26bced4d53678a22d6e423e9d8716377def84545fe328236e3af070e7f"
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1097,6 +1107,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "serde_jcs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3a60f3fda61525e439ef6d67422118f11e986566997d9021c56867ad814a0aa"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

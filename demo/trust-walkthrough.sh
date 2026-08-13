@@ -125,7 +125,11 @@ cat > "$catalog_json" <<'EOF'
     "displayName": "Demo Trust Publisher",
     "identifier": "did:web:demo.example.com",
     "trustManifest": {
-      "identity": "did:web:demo.example.com"
+      "identity": "did:web:demo.example.com",
+      "trustSchema": {
+        "identifier": "urn:ai-catalog:trust-schema:minimal:v1",
+        "version": "1.0"
+      }
     }
   },
   "entries": [
