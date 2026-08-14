@@ -60,16 +60,16 @@ powershell -ExecutionPolicy Bypass -File .\demo\consumer-walkthrough.ps1
 
 ## CLI surfaces covered
 
-The walkthrough exercises 21 steps covering the full CLI:
+The walkthrough exercises 30 steps covering the full CLI:
 
 ### Author commands
 
 | Step | Command |
 |------|---------|
-| 1 | `ai-catalog validate <file>` — text output |
-| 2 | `ai-catalog validate --json <file>` — JSON output |
-| 3 | `ai-catalog validate --json -` — validate from stdin |
-| 4 | `ai-catalog format <file>` — pretty-print |
+| 1 | `ai-catalog format <file>` — pretty-print the catalog under test first |
+| 2 | `ai-catalog validate <file>` — text output |
+| 3 | `ai-catalog validate --json <file>` — JSON output |
+| 4 | `ai-catalog validate --json -` — validate from stdin |
 | 5 | `ai-catalog trust inspect <file>` — text output |
 | 6 | `ai-catalog trust inspect --json <file>` — JSON output |
 
@@ -93,6 +93,25 @@ The walkthrough exercises 21 steps covering the full CLI:
 | 20 | `ai-catalog catalog remove <name>` — unregister a catalog |
 | 21 | `ai-catalog catalog list` — confirm empty registry after removal |
 
+### OCI commands
+
+The same catalog is then taken through an OCI image layout instead of the
+plain `file://` content-addressed path above.
+
+| Step | Command |
+|------|---------|
+| 22 | `ai-catalog oci export-layout --tag <tag> <file> <dir>` — write a standard OCI image layout |
+| 23 | `ai-catalog oci add <name> <dir> --ref-name <tag>` — register a catalog from a layout |
+| 24 | `ai-catalog catalog list` — both CAS and OCI sources side by side |
+| 25 | `ai-catalog oci search <keyword>` — search OCI-sourced entries only |
+| 26 | `ai-catalog oci search --json <keyword>` — JSON output |
+| 27 | `ai-catalog oci show <identifier>` — entry detail, text |
+| 28 | `ai-catalog oci show --json <identifier>` — entry detail, JSON |
+| 29 | `ai-catalog oci pull --output <dir> <identifier>` — pull an OCI-sourced entry |
+| 30 | compare `oci search` (OCI only) against `search` (all sources) |
+
+The OCI mapping is tooling built on top of the specification, not part of it.
+
 ## What the script does
 
 1. Creates a temporary directory and sets `AI_CATALOG_CACHE_DIR` to isolate the
@@ -100,8 +119,8 @@ The walkthrough exercises 21 steps covering the full CLI:
 2. Writes a three-entry JSONL eval file, a nested dataset catalog (two entries),
    and a root catalog (agent, model, inline config, nested-catalog reference) —
    all using `file://` URLs so no network is required.
-3. Runs the author commands against the root catalog to demonstrate validation,
-   formatting, and trust inspection.
+3. Runs the author commands against the root catalog: prints the catalog first,
+   then demonstrates validation and trust inspection against it.
 4. Registers the root catalog with `catalog add`.  The CLI resolves the nested
    catalog reference and caches all entries via content-addressed storage under
    `AI_CATALOG_CACHE_DIR/objects/`.
@@ -122,8 +141,8 @@ The walkthrough exercises 21 steps covering the full CLI:
 duplicated.
 
 **Nested catalog resolution** — `catalog add` follows `application/ai-catalog+json`
-entries recursively (up to depth 10) and indexes all leaf entries so they are
-searchable and showable by identifier.
+entries recursively (up to depth 4, the limit the specification recommends) and
+indexes all leaf entries so they are searchable and showable by identifier.
 
 **Inline-data pull** — entries with a `data` field are written offline without
 any HTTP fetch.

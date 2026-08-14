@@ -5,6 +5,7 @@ use colored::Colorize;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
+use crate::resolver::cli_extension;
 
 pub async fn execute(name_or_url: &str) -> Result<()> {
     let cache = CacheManager::new()?;
@@ -14,8 +15,7 @@ pub async fn execute(name_or_url: &str) -> Result<()> {
             .as_deref()
             .map(|n| n.eq_ignore_ascii_case(name_or_url))
             .unwrap_or(false)
-            || e.metadata
-                .as_ref()
+            || cli_extension(e)
                 .and_then(|m| m.get("sourceUrl"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.eq_ignore_ascii_case(name_or_url))
@@ -32,16 +32,13 @@ pub async fn execute(name_or_url: &str) -> Result<()> {
         .entries
         .iter()
         .filter_map(|e| {
-            e.metadata
-                .as_ref()
+            cli_extension(e)
                 .and_then(|m| m.get("contentHash"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
         .collect();
-    if let Some(hash) = removed
-        .metadata
-        .as_ref()
+    if let Some(hash) = cli_extension(&removed)
         .and_then(|m| m.get("contentHash"))
         .and_then(|v| v.as_str())
         && !referenced_hashes.contains(hash)

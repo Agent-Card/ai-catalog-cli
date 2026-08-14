@@ -16,9 +16,39 @@
 
 set -euo pipefail
 
+if [[ -t 2 ]]; then
+    BOLD=$'\033[1m'
+    DIM=$'\033[2m'
+    CYAN=$'\033[1;36m'
+    GREEN=$'\033[1;32m'
+    RESET=$'\033[0m'
+else
+    BOLD=''
+    DIM=''
+    CYAN=''
+    GREEN=''
+    RESET=''
+fi
+
+step_count=0
+
+# Each section runs to completion, then waits for Enter. Skipped when stdin is
+# not a terminal so piped and redirected runs cannot block.
+section() {
+    if [[ "$step_count" -gt 0 && -t 0 ]]; then
+        printf '\n%s  ── press enter to continue ──%s' "$DIM" "$RESET" >&2
+        read -r || true
+    fi
+    echo >&2
+    echo "${BOLD}────────────────────────────────────────────────────────${RESET}" >&2
+    echo "${BOLD}  $*${RESET}" >&2
+    echo "${BOLD}────────────────────────────────────────────────────────${RESET}" >&2
+}
+
 step() {
-    echo
-    echo "== $* =="
+    step_count=$((step_count + 1))
+    echo >&2
+    echo "${CYAN}== $* ==${RESET}" >&2
 }
 
 require_tool() {
@@ -28,7 +58,22 @@ require_tool() {
     fi
 }
 
+echo_cmd() {
+    printf '%s$ %s%s\n' "$GREEN" "$*" "$RESET" >&2
+}
+
 run_cli() {
+    local display=() arg needs_quoting
+    for arg in "$@"; do
+        needs_quoting=0
+        [[ "$arg" =~ [^A-Za-z0-9_./:@=-] ]] && needs_quoting=1
+        arg="${arg//$tmp_root/\$DEMO}"
+        if [[ "$needs_quoting" == "1" ]]; then
+            arg="'$arg'"
+        fi
+        display+=("$arg")
+    done
+    echo_cmd "ai-catalog ${display[*]}"
     cargo run -q -- "$@"
 }
 
@@ -109,7 +154,14 @@ cat > "$root_catalog_path" <<EOF
       "version": "1.0.0",
       "trustManifest": {
         "identity": "urn:demo:agent:conversational-v1",
-        "identityType": "urn"
+        "identityType": "urn",
+        "attestations": [
+          {
+            "type": "SOC2-Type2",
+            "uri": "https://trust.example.com/reports/soc2-2026.pdf",
+            "digest": "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
+          }
+        ]
       }
     },
     {
@@ -146,18 +198,20 @@ cat > "$root_catalog_path" <<EOF
 EOF
 
 # ── Author commands ───────────────────────────────────────────────────────────
+section "Author commands"
 
-step "1. Validate the catalog (text output)"
+step "1. The catalog we are working with (format / pretty-print)"
+run_cli format "$root_catalog_path"
+
+step "2. Validate the catalog (text output)"
 run_cli validate "$root_catalog_path"
 
-step "2. Validate the catalog (JSON output)"
+step "3. Validate the catalog (JSON output)"
 run_cli validate --json "$root_catalog_path"
 
-step "3. Validate from stdin"
-run_cli validate --json - < "$root_catalog_path"
-
-step "4. Format / pretty-print the catalog"
-run_cli format "$root_catalog_path"
+step "4. Validate from stdin"
+echo_cmd "ai-catalog validate --json - < $(basename "$root_catalog_path")"
+cargo run -q -- validate --json - < "$root_catalog_path"
 
 step "5. Inspect trust manifests (text output)"
 run_cli trust inspect "$root_catalog_path"
@@ -166,6 +220,7 @@ step "6. Inspect trust manifests (JSON output)"
 run_cli trust inspect --json "$root_catalog_path"
 
 # ── Consumer commands: catalog management ─────────────────────────────────────
+section "Consumer commands: catalog management"
 
 step "7. Register the catalog (fetches and caches locally)"
 run_cli catalog add demo-registry "file://$root_catalog_path"
@@ -177,6 +232,7 @@ step "9. List registered catalogs (JSON)"
 run_cli catalog list --json
 
 # ── Consumer commands: search ─────────────────────────────────────────────────
+section "Consumer commands: search"
 
 step "10. Search by keyword: 'agent' (text table)"
 run_cli search agent
@@ -191,6 +247,7 @@ step "13. Search with result limit (-n 2)"
 run_cli search -n 2 nlp
 
 # ── Consumer commands: show ───────────────────────────────────────────────────
+section "Consumer commands: show"
 
 step "14. Show entry details (text table): conversational agent"
 run_cli show urn:demo:agent:conversational-v1
@@ -202,6 +259,7 @@ step "16. Show entry scoped to a specific registered catalog"
 run_cli show --scope demo-registry urn:demo:dataset:eval-suite-v3
 
 # ── Consumer commands: pull ───────────────────────────────────────────────────
+section "Consumer commands: pull"
 
 step "17. Pull inline-data entry (config) to disk"
 run_cli pull --output "$pull_dir" urn:demo:config:default-settings
@@ -213,7 +271,8 @@ run_cli pull --output "$pull_dir" urn:demo:dataset:eval-suite-v3
 echo "pulled file:"
 cat "$pull_dir/eval-suite-v3.json"
 
-# ── Consumer commands: update and remove ─────────────────────────────────────
+# ── Consumer commands: update and remove ──────────────────────────────────────
+section "Consumer commands: update and remove"
 
 step "19. Update the catalog (content unchanged — reports 'up to date')"
 run_cli catalog update demo-registry
@@ -224,9 +283,8 @@ run_cli catalog remove demo-registry
 step "21. List catalogs after removal"
 run_cli catalog list
 
-# ── OCI storage path ─────────────────────────────────────────────────────────
-# The following steps show the same catalog going through an OCI image layout
-# instead of the plain-HTTP / file:// CAS path above.
+# ── OCI storage path ──────────────────────────────────────────────────────────
+section "OCI storage path"
 
 oci_layout_dir="$tmp_root/oci-layout"
 oci_pull_dir="$tmp_root/oci-pulled"
@@ -269,7 +327,8 @@ echo "--- oci search embeddings (OCI only: 1 catalog) ---"
 run_cli oci search --json embeddings | python3 -c "import sys,json; [print(' •', e['identifier']) for e in json.load(sys.stdin).get('entries',[])]"
 echo
 echo "--- search embeddings (all sources: CAS + OCI combined) ---"
+echo "    the same entry is listed once per registered source"
 run_cli search --json embeddings | python3 -c "import sys,json; [print(' •', e['identifier']) for e in json.load(sys.stdin).get('entries',[])]"
 
-step "Consumer + OCI walkthrough complete"
-echo "all temporary files were cleaned up from $tmp_root"
+section "Walkthrough complete — ${step_count} commands, all against released 0.2.0 crates"
+echo "all temporary files were cleaned up from $tmp_root" >&2

@@ -5,6 +5,7 @@ use colored::Colorize;
 
 use crate::cache::CacheManager;
 use crate::error::Result;
+use crate::resolver::cli_extension;
 
 use super::OutputFormat;
 
@@ -37,8 +38,7 @@ pub async fn execute(output: OutputFormat) -> Result<()> {
         .entries
         .iter()
         .map(|e| {
-            e.metadata
-                .as_ref()
+            cli_extension(e)
                 .and_then(|m| m.get("sourceUrl"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("-")
@@ -62,7 +62,7 @@ pub async fn execute(output: OutputFormat) -> Result<()> {
 
     for entry in &registry.entries {
         let name = entry.display_name.as_deref().unwrap_or("<unnamed>");
-        let meta = entry.metadata.as_ref();
+        let meta = cli_extension(entry);
         let source_url = meta
             .and_then(|m| m.get("sourceUrl"))
             .and_then(|v| v.as_str())

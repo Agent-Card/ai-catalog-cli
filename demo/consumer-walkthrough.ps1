@@ -128,7 +128,14 @@ try {
       "version": "1.0.0",
       "trustManifest": {
         "identity": "urn:demo:agent:conversational-v1",
-        "identityType": "urn"
+        "identityType": "urn",
+        "attestations": [
+          {
+            "type": "SOC2-Type2",
+            "uri": "https://trust.example.com/reports/soc2-2026.pdf",
+            "digest": "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
+          }
+        ]
       }
     },
     {

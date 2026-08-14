@@ -17,7 +17,7 @@ use ai_catalog::CatalogEntry;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::resolver::{find_entry_by_id_in_url, resolve_and_cache};
+use crate::resolver::{cli_extension, find_entry_by_id_in_url, resolve_and_cache};
 
 pub const CATALOG_MIME_TYPE: &str = "application/ai-catalog+json";
 
@@ -54,8 +54,7 @@ pub(crate) async fn find_entry_in_scope(
                 .as_deref()
                 .map(|n| n.eq_ignore_ascii_case(scope))
                 .unwrap_or(false)
-                || e.metadata
-                    .as_ref()
+                || cli_extension(e)
                     .and_then(|m| m.get("sourceUrl"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.eq_ignore_ascii_case(scope))

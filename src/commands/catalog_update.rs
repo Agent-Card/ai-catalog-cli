@@ -6,7 +6,7 @@ use colored::Colorize;
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::fetch::build_client;
-use crate::resolver::{make_entry_metadata, resolve_and_cache};
+use crate::resolver::{cli_extension, make_entry_extensions, resolve_and_cache};
 
 pub async fn execute(name: &str) -> Result<()> {
     let cache = CacheManager::new()?;
@@ -27,16 +27,12 @@ pub async fn execute(name: &str) -> Result<()> {
                 "no catalog named \"{name}\". Use `ai-catalog catalog list` to see registered catalogs."
             ))
         })?;
-    let source_url = registry.entries[idx]
-        .metadata
-        .as_ref()
+    let source_url = cli_extension(&registry.entries[idx])
         .and_then(|m| m.get("sourceUrl"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::Other(format!("catalog \"{name}\" has no sourceUrl in metadata")))?
+        .ok_or_else(|| Error::Other(format!("catalog \"{name}\" has no recorded sourceUrl")))?
         .to_string();
-    let old_hash = registry.entries[idx]
-        .metadata
-        .as_ref()
+    let old_hash = cli_extension(&registry.entries[idx])
         .and_then(|m| m.get("contentHash"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
@@ -53,11 +49,11 @@ pub async fn execute(name: &str) -> Result<()> {
     }
     let entry_count = new_entries.len();
     let file_url = cache.object_file_url(&new_hash);
-    let meta_val = make_entry_metadata(&source_url, &new_hash, entry_count);
+    let extensions = make_entry_extensions(&source_url, &new_hash, entry_count);
     registry.entries[idx].url = Some(file_url);
     registry.entries[idx].identifier = format!("urn:ai-catalog:local:{}", &new_hash[..8]);
     registry.entries[idx].updated_at = Some(chrono::Utc::now().to_rfc3339());
-    registry.entries[idx].metadata = Some(serde_json::from_value(meta_val).unwrap_or_default());
+    registry.entries[idx].extensions = Some(extensions);
     cache.write_registry(&registry)?;
     println!(
         "{} ({entry_count} entries, hash {})",

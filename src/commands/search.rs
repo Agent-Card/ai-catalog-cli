@@ -64,7 +64,8 @@ pub async fn execute(
             spec_version: "1.0".to_string(),
             host: None,
             entries: matches.iter().map(|re| re.entry.clone()).collect(),
-            metadata: None,
+            signature: None,
+            extensions: None,
             extra_fields: Default::default(),
         };
         println!("{}", serde_json::to_string_pretty(&catalog)?);

@@ -8,7 +8,7 @@ use ai_catalog::CatalogEntry;
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::fetch::{build_client, local_path_to_file_url};
-use crate::resolver::{make_entry_metadata, resolve_and_cache};
+use crate::resolver::{cli_extension, make_entry_extensions, resolve_and_cache};
 
 pub async fn execute(name: &str, url: &str) -> Result<()> {
     let url = local_path_to_file_url(url)?;
@@ -29,9 +29,7 @@ pub async fn execute(name: &str, url: &str) -> Result<()> {
                     "a catalog named \"{name}\" is already registered. Use `ai-catalog catalog update {name}` to refresh it."
                 )));
             }
-            if let Some(source_url) = entry
-                .metadata
-                .as_ref()
+            if let Some(source_url) = cli_extension(entry)
                 .and_then(|m| m.get("sourceUrl"))
                 .and_then(|v| v.as_str())
                 && source_url.eq_ignore_ascii_case(url)
@@ -54,7 +52,7 @@ pub async fn execute(name: &str, url: &str) -> Result<()> {
     let entry_count = entries.len();
     let file_url = cache.object_file_url(&root_hash);
     let identifier = format!("urn:ai-catalog:local:{}", &root_hash[..8]);
-    let meta_val = make_entry_metadata(url, &root_hash, entry_count);
+    let extensions = make_entry_extensions(url, &root_hash, entry_count);
     let new_entry = CatalogEntry {
         identifier,
         entry_type: "application/ai-catalog+json".to_string(),
@@ -65,7 +63,7 @@ pub async fn execute(name: &str, url: &str) -> Result<()> {
         data: None,
         version: None,
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
-        metadata: Some(serde_json::from_value(meta_val).unwrap_or_default()),
+        extensions: Some(extensions),
         publisher: None,
         trust_manifest: None,
         extra_fields: Default::default(),

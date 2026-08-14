@@ -70,7 +70,7 @@ impl CacheManager {
             return Ok(AiCatalog {
                 spec_version: "1.0".to_string(),
                 host: Some(HostInfo {
-                    display_name: Some("ai-catalog local registry".to_string()),
+                    display_name: "ai-catalog local registry".to_string(),
                     identifier: None,
                     documentation_url: None,
                     logo_url: None,
@@ -78,7 +78,8 @@ impl CacheManager {
                     extra_fields: Default::default(),
                 }),
                 entries: vec![],
-                metadata: None,
+                signature: None,
+                extensions: None,
                 extra_fields: Default::default(),
             });
         }
@@ -203,10 +204,7 @@ mod tests {
         assert_eq!(registry.spec_version, "1.0");
         assert!(registry.entries.is_empty());
         let host = registry.host.unwrap();
-        assert_eq!(
-            host.display_name.as_deref(),
-            Some("ai-catalog local registry")
-        );
+        assert_eq!(host.display_name, "ai-catalog local registry");
     }
 
     #[test]

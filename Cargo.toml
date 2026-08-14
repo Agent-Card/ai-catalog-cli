@@ -18,10 +18,10 @@ name = "ai-catalog"
 path = "src/main.rs"
 
 [dependencies]
-ai-catalog = "0.1.0"
-ai-catalog-oci = "0.1.0"
-ai-catalog-trust = "0.1.0"
-ai-catalog-validate = "0.1.0"
+ai-catalog = "0.2.0"
+ai-catalog-oci = "0.2.0"
+ai-catalog-trust = "0.2.0"
+ai-catalog-validate = "0.2.0"
 async-recursion = "1"
 chrono = { version = "0.4", features = ["serde"] }
 colored = "2"
