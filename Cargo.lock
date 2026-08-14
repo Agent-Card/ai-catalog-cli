@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ai-catalog",
  "ai-catalog-oci",
