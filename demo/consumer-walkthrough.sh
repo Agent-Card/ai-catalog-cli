@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# Copyright AI-Catalog Contributors (https://github.com/Agent-Card)
 # SPDX-License-Identifier: Apache-2.0
 
 # Consumer workflow walkthrough for ai-catalog.

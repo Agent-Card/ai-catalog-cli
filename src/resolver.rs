@@ -1,4 +1,4 @@
-// Copyright AGNTCY Contributors (https://github.com/agntcy)
+// Copyright AI-Catalog Contributors (https://github.com/Agent-Card)
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, HashSet};
@@ -578,7 +578,7 @@ pub fn find_entry_by_id_oci(id: &str, cache: &CacheManager) -> Result<Option<Cat
 /// Namespace for the CLI's own bookkeeping. The specification requires every
 /// extension key to be a URL or a reverse-DNS string, so the CLI keeps its
 /// fields under one key rather than writing them at the top level.
-pub const CLI_EXTENSION_KEY: &str = "org.agntcy.ai-catalog-cli";
+pub const CLI_EXTENSION_KEY: &str = "org.ai-catalog.ai-catalog-cli";
 
 /// Build the `extensions` map the CLI attaches to a registry entry.
 pub fn make_entry_extensions(

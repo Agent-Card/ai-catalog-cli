@@ -7,21 +7,21 @@ Command-line tool for inspecting, validating, and packaging
 |---|---|
 | Specification | <https://agent-card.github.io/ai-catalog/> |
 | Upstream repository | <https://github.com/Agent-Card/ai-catalog> |
-| Rust libraries | <https://github.com/agntcy/ai-catalog-rust> |
+| Rust libraries | <https://github.com/Agent-Card/ai-catalog-rust> |
 
 The crate is named `ai-catalog-cli`; the installed binary is `ai-catalog`.
 
 ## Install
 
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
-[release](https://github.com/agntcy/ai-catalog-cli/releases). Download the
+[release](https://github.com/Agent-Card/ai-catalog-cli/releases). Download the
 archive for your platform, verify it against the accompanying `.sha256` file,
 and place `ai-catalog` on your `PATH`:
 
 ```sh
 VERSION=v0.1.0
 NAME=ai-catalog-darwin-arm64   # see the release page for other platforms
-BASE=https://github.com/agntcy/ai-catalog-cli/releases/download/$VERSION
+BASE=https://github.com/Agent-Card/ai-catalog-cli/releases/download/$VERSION
 
 curl -fsSLO "$BASE/$NAME.tar.gz" -O "$BASE/$NAME.sha256"
 shasum -a 256 -c "$NAME.sha256"
@@ -78,7 +78,7 @@ just coverage       # llvm-cov summary
 ```
 
 This CLI builds on the four AI Catalog library crates, released separately from
-[`agntcy/ai-catalog-rust`](https://github.com/agntcy/ai-catalog-rust):
+[`Agent-Card/ai-catalog-rust`](https://github.com/Agent-Card/ai-catalog-rust):
 [`ai-catalog`](https://crates.io/crates/ai-catalog),
 [`ai-catalog-validate`](https://crates.io/crates/ai-catalog-validate),
 [`ai-catalog-trust`](https://crates.io/crates/ai-catalog-trust), and

@@ -1,4 +1,4 @@
-# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# Copyright AI-Catalog Contributors (https://github.com/Agent-Card)
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
@@ -10,7 +10,7 @@ readme = "README.md"
 version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/agntcy/ai-catalog-cli"
+repository = "https://github.com/Agent-Card/ai-catalog-cli"
 rust-version = "1.95"
 
 [[bin]]
