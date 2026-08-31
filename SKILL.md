@@ -40,7 +40,7 @@ ai-catalog catalog add <name> <url>
 Example:
 
 ```bash
-ai-catalog catalog add ai-tools https://raw.githubusercontent.com/agntcy/ai-catalog-cli/main/fixtures/spec-example.json
+ai-catalog catalog add ai-tools https://raw.githubusercontent.com/Agent-Card/ai-catalog-cli/main/fixtures/spec-example.json
 ```
 
 Accepts HTTP/HTTPS URLs or `file://` paths. Nested catalogs are fetched and cached automatically.

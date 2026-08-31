@@ -7,27 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0](https://github.com/agntcy/ai-catalog-cli/compare/v0.1.0...v0.2.0) - 2026-08-14
+## [0.2.0](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.1.0...v0.2.0) - 2026-08-14
 
 ### Added
 
-- adopt SDK 0.2.0 and rework the consumer demo ([#7](https://github.com/agntcy/ai-catalog-cli/pull/7))
+- adopt SDK 0.2.0 and rework the consumer demo ([#7](https://github.com/Agent-Card/ai-catalog-cli/pull/7))
 
 ### Fixed
 
-- example catalog, bare path support, inline data pull/show, and refactor ([#6](https://github.com/agntcy/ai-catalog-cli/pull/6))
+- example catalog, bare path support, inline data pull/show, and refactor ([#6](https://github.com/Agent-Card/ai-catalog-cli/pull/6))
 
 ### Other
 
-- add --media-type, URI-based scope, SKILL.md ([#4](https://github.com/agntcy/ai-catalog-cli/pull/4))
+- add --media-type, URI-based scope, SKILL.md ([#4](https://github.com/Agent-Card/ai-catalog-cli/pull/4))
 
-## [0.1.0](https://github.com/agntcy/ai-catalog-cli/releases/tag/v0.1.0) - 2026-08-07
+## [0.1.0](https://github.com/Agent-Card/ai-catalog-cli/releases/tag/v0.1.0) - 2026-08-07
 
 ### Added
 
-- import the ai-catalog CLI from ai-catalog-rust ([#1](https://github.com/agntcy/ai-catalog-cli/pull/1))
+- import the ai-catalog CLI from ai-catalog-rust ([#1](https://github.com/Agent-Card/ai-catalog-cli/pull/1))
 
 ### Other
 
-- attach prebuilt binaries to releases ([#3](https://github.com/agntcy/ai-catalog-cli/pull/3))
+- attach prebuilt binaries to releases ([#3](https://github.com/Agent-Card/ai-catalog-cli/pull/3))
 - add license, code owners, and gitignore
