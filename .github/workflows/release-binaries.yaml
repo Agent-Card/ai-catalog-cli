@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ---
-name: ci-release-binaries
+name: release-binaries
 
 # release-plz creates the tag and the GitHub release; this only attaches assets.
 on:
