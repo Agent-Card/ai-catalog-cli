@@ -1,0 +1,90 @@
+# Copyright AI-Catalog Contributors (https://github.com/Agent-Card/ai-catalog-cli)
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+---
+name: homebrew-formula
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to render into Formula/ai-catalog.rb
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to render into Formula/ai-catalog.rb
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  refresh-formula:
+    name: Refresh Homebrew formula
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Render Homebrew formula
+        env:
+          TAG: ${{ inputs.tag }}
+        run: python3 scripts/render_homebrew_formula.py --tag "$TAG"
+
+      - name: Open formula refresh PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          FORMULA: Formula/ai-catalog.rb
+        run: |
+          if [ -z "$(git status --porcelain -- "$FORMULA")" ]; then
+            echo "Formula already up to date for $TAG"
+            exit 0
+          fi
+
+          branch="automation/homebrew-${TAG#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add "$FORMULA"
+          git commit -s -m "release: update Homebrew formula for $TAG"
+          git push --force --set-upstream origin "$branch"
+
+          open_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" \
+            --base main --state open --json number --jq 'first(.[].number) // ""')
+          if [ -n "$open_pr" ]; then
+            echo "Updated existing PR #$open_pr" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "release: update Homebrew formula for $TAG" \
+            --body "Repoints \`$FORMULA\` at the $TAG archives and their published SHA256 digests."
+          then
+            exit 0
+          fi
+
+          # GITHUB_TOKEN cannot open pull requests unless the organization
+          # allows it, so leave the branch and a compare link behind instead.
+          {
+            echo "### Homebrew formula for $TAG"
+            echo
+            echo "Pushed \`$branch\`, but could not open the PR. Open it here:"
+            echo
+            echo "https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+          } >> "$GITHUB_STEP_SUMMARY"

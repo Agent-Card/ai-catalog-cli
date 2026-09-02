@@ -13,6 +13,16 @@ The crate is named `ai-catalog-cli`; the installed binary is `ai-catalog`.
 
 ## Install
 
+On macOS and Linux, install from the tap in this repository:
+
+```sh
+brew tap Agent-Card/ai-catalog-cli https://github.com/Agent-Card/ai-catalog-cli
+brew install ai-catalog
+```
+
+The URL is required because Homebrew only infers it for repositories named
+`homebrew-<tap>`.
+
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
 [release](https://github.com/Agent-Card/ai-catalog-cli/releases). Download the
 archive for your platform, verify it against the accompanying `.sha256` file,

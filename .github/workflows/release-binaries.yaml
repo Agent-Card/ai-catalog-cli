@@ -77,3 +77,13 @@ jobs:
           checksum: sha256
           include: LICENSE,README.md
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  homebrew-formula:
+    name: Homebrew formula
+    needs: build-binaries
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/homebrew-formula.yaml
+    with:
+      tag: ${{ github.event.release.tag_name }}
