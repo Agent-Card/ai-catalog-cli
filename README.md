@@ -17,7 +17,8 @@ On macOS and Linux, install from the tap in this repository:
 
 ```sh
 brew tap Agent-Card/ai-catalog-cli https://github.com/Agent-Card/ai-catalog-cli
-brew install Agent-Card/ai-catalog-cli/ai-catalog
+brew trust Agent-Card/ai-catalog-cli
+brew install ai-catalog
 ```
 
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
