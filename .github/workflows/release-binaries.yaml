@@ -87,3 +87,16 @@ jobs:
     uses: ./.github/workflows/homebrew-formula.yaml
     with:
       tag: ${{ github.event.release.tag_name }}
+
+  winget-manifests:
+    name: WinGet manifests
+    needs: build-binaries
+    permissions:
+      contents: read
+    uses: ./.github/workflows/winget-manifests.yaml
+    with:
+      release_tag: ${{ github.event.release.tag_name }}
+      publish: true
+    secrets:
+      PROJECT_APP_ID: ${{ secrets.PROJECT_APP_ID }}
+      PROJECT_APP_KEY: ${{ secrets.PROJECT_APP_KEY }}
