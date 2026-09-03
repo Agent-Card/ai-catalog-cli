@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.2.2...v0.2.3) - 2026-09-03
+
+### Fixed
+
+- add homebrew ([#13](https://github.com/Agent-Card/ai-catalog-cli/pull/13))
+
+### Other
+
+- render and validate WinGet manifests on release ([#16](https://github.com/Agent-Card/ai-catalog-cli/pull/16))
+- update Homebrew formula for v0.2.2 ([#15](https://github.com/Agent-Card/ai-catalog-cli/pull/15))
+
 ## [0.2.2](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.2.1...v0.2.2) - 2026-09-01
 
 ### Other
