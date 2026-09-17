@@ -2,7 +2,7 @@
 name: Feature Request
 description: Suggest a feature for this project.
 title: "[Feature]: "
-labels: ["enhancement", "triage"]
+labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
