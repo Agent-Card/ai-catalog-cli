@@ -200,6 +200,7 @@ def render_locale_manifest(
         Publisher: {PUBLISHER}
         PublisherUrl: {PUBLISHER_URL}
         PublisherSupportUrl: {repository_url}/issues
+        PrivacyUrl: {repository_url}/blob/main/PRIVACY.md
         Author: {AUTHOR}
         PackageName: {PACKAGE_NAME}
         PackageUrl: {repository_url}
