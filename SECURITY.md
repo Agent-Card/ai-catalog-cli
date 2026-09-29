@@ -6,10 +6,15 @@ Until a stable release process is established, security fixes are targeted at th
 
 ## Reporting a Vulnerability
 
-- Prefer a private reporting channel.
-- If GitHub Security Advisories are enabled for the repository, use the "Report a vulnerability" flow.
-- If no private reporting channel is available, contact the repository maintainers privately before public disclosure.
-- Do not open a public issue for an unpatched vulnerability.
+Use GitHub's private vulnerability reporting flow for this repository:
+
+- <https://github.com/Agent-Card/ai-catalog-cli/security/advisories/new>
+
+If private reporting is not available to you, contact the project maintainers
+privately through GitHub and request a secure channel before sharing sensitive
+details.
+
+Do not open a public issue for an unpatched vulnerability.
 
 ## What to Include
 

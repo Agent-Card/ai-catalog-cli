@@ -7,6 +7,15 @@ default:
 
 set windows-shell := ["powershell", "-NoLogo", "-NoProfile", "-Command"]
 
+# renovate: datasource=github-releases depName=renovatebot/renovate versioning=semver
+RENOVATE_VERSION := "44.107.0"
+
+BIN_DIR := justfile_directory() / ".bin"
+# The version is part of the path, so a bump installs fresh instead of
+# reusing whatever is already there.
+RENOVATE_HOME := BIN_DIR / ("renovate-" + RENOVATE_VERSION)
+RENOVATE_BIN := RENOVATE_HOME / "node_modules" / ".bin" / "renovate"
+
 demo_oci_layout_command := if os_family() == "windows" {
 	"powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./demo/oci-layout-walkthrough.ps1"
 } else {
@@ -38,6 +47,15 @@ demo-consumer:
 # POSIX only; there is no PowerShell port of this walkthrough yet.
 demo-trust:
 	./demo/trust-walkthrough.sh
+
+# Sync dependencies with Renovate (local and analytical unless RENOVATE_PLATFORM is set)
+[unix]
+renovate-sync *OPTS: _renovate
+	"{{ RENOVATE_BIN }}" --platform "${RENOVATE_PLATFORM:-local}" {{ OPTS }}
+
+[unix]
+_renovate:
+	[ -x "{{ RENOVATE_BIN }}" ] || npm install --prefix "{{ RENOVATE_HOME }}" --no-audit --no-fund --loglevel=error renovate@{{ RENOVATE_VERSION }}
 
 coverage:
 	toolchain="$(awk -F'"' '/^channel = / {print $2}' rust-toolchain.toml)"; \
