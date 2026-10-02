@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.2.2...v0.2.3) - 2026-10-02
+
+### Added
+
+- add openssf scoreboard to the repository ([#18](https://github.com/Agent-Card/ai-catalog-cli/pull/18))
+
+### Fixed
+
+- add homebrew ([#13](https://github.com/Agent-Card/ai-catalog-cli/pull/13))
+
+### Other
+
+- *(deps)* update dependency renovatebot/renovate to v44.115.4 ([#34](https://github.com/Agent-Card/ai-catalog-cli/pull/34))
+- *(deps)* update rust ([#32](https://github.com/Agent-Card/ai-catalog-cli/pull/32))
+- *(deps)* update dependency renovatebot/renovate to v44.115.2 ([#29](https://github.com/Agent-Card/ai-catalog-cli/pull/29))
+- *(deps)* update actions-rust-lang/setup-rust-toolchain action to v2 ([#31](https://github.com/Agent-Card/ai-catalog-cli/pull/31))
+- change renovate config ([#33](https://github.com/Agent-Card/ai-catalog-cli/pull/33))
+- *(deps)* update github actions ([#30](https://github.com/Agent-Card/ai-catalog-cli/pull/30))
+- add CI success gate ([#25](https://github.com/Agent-Card/ai-catalog-cli/pull/25))
+- add OpenSSF scorecard improvements ([#24](https://github.com/Agent-Card/ai-catalog-cli/pull/24))
+- add PRIVACY.md ([#23](https://github.com/Agent-Card/ai-catalog-cli/pull/23))
+- add issue templates ([#22](https://github.com/Agent-Card/ai-catalog-cli/pull/22))
+- add CONTRIBUTORS.md file ([#19](https://github.com/Agent-Card/ai-catalog-cli/pull/19))
+- render and validate WinGet manifests on release ([#16](https://github.com/Agent-Card/ai-catalog-cli/pull/16))
+- update Homebrew formula for v0.2.2 ([#15](https://github.com/Agent-Card/ai-catalog-cli/pull/15))
+
 ## [0.2.2](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.2.1...v0.2.2) - 2026-09-01
 
 ### Other
