@@ -25,8 +25,8 @@ ai-catalog-trust = "0.2.0"
 ai-catalog-validate = "0.2.0"
 async-recursion = "1"
 chrono = { version = "0.4", features = ["serde"] }
-colored = "2"
-dirs = "5"
+colored = "3"
+dirs = "7"
 hex = "0.4"
 regex = "1"
 reqwest = { version = "0.13", features = ["json", "rustls-tls"], default-features = false }
