@@ -13,9 +13,9 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "080e665ced580b4a6596c5a32433cb29f01835dc7f28dd485a5700e91960251e"
+checksum = "0d293e9318f359da9817c0040b0044ed77ede4c42a139a317d3ab997feb927ea"
 dependencies = [
  "regex",
  "serde",
@@ -49,9 +49,9 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog-oci"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6efa8a84420e45fceaba6dac24eb9fe72e1c3ed509533c4d4683a5fda074340"
+checksum = "aad895a3a7efc9297424cb85b37a234dc31693a140c04c539d2134aa5641440e"
 dependencies = [
  "ai-catalog",
  "serde",
@@ -62,9 +62,9 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog-trust"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "959bb806311aa8ff033faf8f5366a9e1ec167ddb9170158f86a5d95786cd7ca8"
+checksum = "c835b60bf35e59f71638bcb875612ce478ed08c6cb16fe111dc4f4f536fe9b9f"
 dependencies = [
  "ai-catalog",
  "base64 0.22.1",
@@ -77,9 +77,9 @@ dependencies = [
 
 [[package]]
 name = "ai-catalog-validate"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a64a1c494c56f18edaa5a4e7c0b689ce51e9325aee3dc9249d9ab809c391765"
+checksum = "b76e1d405f39815b182541f1825d96b45bf625562221eccc9d298de43c29e823"
 dependencies = [
  "ai-catalog",
  "regex",
@@ -1546,18 +1546,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.19"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.19"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
