@@ -14,13 +14,34 @@ pub mod pull;
 pub mod search;
 pub mod show;
 
-use ai_catalog::CatalogEntry;
+use std::collections::HashSet;
+
+use ai_catalog::{AiCatalog, CatalogEntry};
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::resolver::{cli_extension, find_entry_by_id_in_url, resolve_and_cache};
 
 pub const CATALOG_MIME_TYPE: &str = "application/ai-catalog+json";
+
+/// Wrap search results in a catalog. Nested catalogs may legally reuse an
+/// identifier, so the flattened list is de-duplicated to keep the document
+/// valid: `(identifier, version)` must be unique.
+pub(crate) fn catalog_of(entries: impl IntoIterator<Item = CatalogEntry>) -> AiCatalog {
+    let mut seen = HashSet::new();
+    let entries = entries
+        .into_iter()
+        .filter(|e| seen.insert((e.identifier.clone(), e.version.clone())))
+        .collect();
+    AiCatalog {
+        spec_version: "1.0".to_string(),
+        host: None,
+        entries,
+        signature: None,
+        extensions: None,
+        extra_fields: Default::default(),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {

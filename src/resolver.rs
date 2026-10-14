@@ -581,6 +581,14 @@ pub fn find_entry_by_id_oci(id: &str, cache: &CacheManager) -> Result<Option<Cat
 /// fields under one key rather than writing them at the top level.
 pub const CLI_EXTENSION_KEY: &str = "org.ai-catalog.ai-catalog-cli";
 
+/// Identifier for a registry entry, derived from its name. Names are unique
+/// (case-insensitively), so registering identical content twice, or updating
+/// a catalog, never produces a duplicate or changing identifier.
+pub fn registry_identifier(kind: &str, name: &str) -> String {
+    let hash = content_hash(name.to_lowercase().as_bytes());
+    format!("urn:ai-catalog:{kind}:{}", &hash[..8])
+}
+
 /// Build the `extensions` map the CLI attaches to a registry entry.
 pub fn make_entry_extensions(
     source_url: &str,
