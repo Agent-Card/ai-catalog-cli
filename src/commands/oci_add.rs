@@ -9,7 +9,7 @@ use ai_catalog_oci::{import_layout, unpack_catalog};
 
 use crate::cache::{CacheManager, content_hash};
 use crate::error::{Error, Result};
-use crate::resolver::{CLI_EXTENSION_KEY, make_entry_extensions};
+use crate::resolver::{CLI_EXTENSION_KEY, make_entry_extensions, registry_identifier};
 
 /// Register a catalog sourced from an OCI image layout.
 ///
@@ -63,7 +63,7 @@ pub async fn execute(name: &str, layout_path: &str, ref_name: Option<&str>) -> R
         .filter(|e| !e.is_nested_catalog())
         .count();
     let file_url = cache.object_file_url(&hash);
-    let identifier = format!("urn:ai-catalog:oci:{}", &hash[..8]);
+    let identifier = registry_identifier("oci", name);
 
     let mut extensions = make_entry_extensions(&source_ref, &hash, entry_count);
     if let Some(obj) = extensions
