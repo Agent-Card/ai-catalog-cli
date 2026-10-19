@@ -60,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File .\demo\consumer-walkthrough.ps1
 
 ## CLI surfaces covered
 
-The walkthrough exercises 30 steps covering the full CLI:
+The walkthrough exercises 28 steps covering the full CLI:
 
 ### Author commands
 
@@ -70,28 +70,26 @@ The walkthrough exercises 30 steps covering the full CLI:
 | 2 | `ai-catalog validate <file>` — text output |
 | 3 | `ai-catalog validate --json <file>` — JSON output |
 | 4 | `ai-catalog validate --json -` — validate from stdin |
-| 5 | `ai-catalog trust inspect <file>` — text output |
-| 6 | `ai-catalog trust inspect --json <file>` — JSON output |
 
 ### Consumer commands
 
 | Step | Command |
 |------|---------|
-| 7  | `ai-catalog catalog add <name> <url>` — register a catalog |
-| 8  | `ai-catalog catalog list` — text table |
-| 9  | `ai-catalog catalog list --json` — JSON output |
-| 10 | `ai-catalog search <keyword>` — text table |
-| 11 | `ai-catalog search --json <keyword>` — JSON output |
-| 12 | `ai-catalog search --regex <pattern>` — regex search across all cached catalogs |
-| 13 | `ai-catalog search -n <N> <keyword>` — limit results |
-| 14 | `ai-catalog show <identifier>` — entry detail, text table |
-| 15 | `ai-catalog show --json <identifier>` — entry detail, JSON |
-| 16 | `ai-catalog show --scope <name> <identifier>` — restrict search to one catalog |
-| 17 | `ai-catalog pull --output <dir> <identifier>` — pull inline-data entry to disk |
-| 18 | `ai-catalog pull --output <dir> <identifier>` — pull file-URL entry to disk |
-| 19 | `ai-catalog catalog update <name>` — re-fetch and refresh a registered catalog |
-| 20 | `ai-catalog catalog remove <name>` — unregister a catalog |
-| 21 | `ai-catalog catalog list` — confirm empty registry after removal |
+| 5  | `ai-catalog catalog add <name> <url>` — register a catalog |
+| 6  | `ai-catalog catalog list` — text table |
+| 7  | `ai-catalog catalog list --json` — JSON output |
+| 8 | `ai-catalog search <keyword>` — text table |
+| 9 | `ai-catalog search --json <keyword>` — JSON output |
+| 10 | `ai-catalog search --regex <pattern>` — regex search across all cached catalogs |
+| 11 | `ai-catalog search -n <N> <keyword>` — limit results |
+| 12 | `ai-catalog show <identifier>` — entry detail, text table |
+| 13 | `ai-catalog show --json <identifier>` — entry detail, JSON |
+| 14 | `ai-catalog show --scope <name> <identifier>` — restrict search to one catalog |
+| 15 | `ai-catalog pull --output <dir> <identifier>` — pull inline-data entry to disk |
+| 16 | `ai-catalog pull --output <dir> <identifier>` — pull file-URL entry to disk |
+| 17 | `ai-catalog catalog update <name>` — re-fetch and refresh a registered catalog |
+| 18 | `ai-catalog catalog remove <name>` — unregister a catalog |
+| 19 | `ai-catalog catalog list` — confirm empty registry after removal |
 
 ### OCI commands
 
@@ -100,15 +98,15 @@ plain `file://` content-addressed path above.
 
 | Step | Command |
 |------|---------|
-| 22 | `ai-catalog oci export-layout --tag <tag> <file> <dir>` — write a standard OCI image layout |
-| 23 | `ai-catalog oci add <name> <dir> --ref-name <tag>` — register a catalog from a layout |
-| 24 | `ai-catalog catalog list` — both CAS and OCI sources side by side |
-| 25 | `ai-catalog oci search <keyword>` — search OCI-sourced entries only |
-| 26 | `ai-catalog oci search --json <keyword>` — JSON output |
-| 27 | `ai-catalog oci show <identifier>` — entry detail, text |
-| 28 | `ai-catalog oci show --json <identifier>` — entry detail, JSON |
-| 29 | `ai-catalog oci pull --output <dir> <identifier>` — pull an OCI-sourced entry |
-| 30 | compare `oci search` (OCI only) against `search` (all sources) |
+| 20 | `ai-catalog oci export-layout --tag <tag> <file> <dir>` — write a standard OCI image layout |
+| 21 | `ai-catalog oci add <name> <dir> --ref-name <tag>` — register a catalog from a layout |
+| 22 | `ai-catalog catalog list` — both CAS and OCI sources side by side |
+| 23 | `ai-catalog oci search <keyword>` — search OCI-sourced entries only |
+| 24 | `ai-catalog oci search --json <keyword>` — JSON output |
+| 25 | `ai-catalog oci show <identifier>` — entry detail, text |
+| 26 | `ai-catalog oci show --json <identifier>` — entry detail, JSON |
+| 27 | `ai-catalog oci pull --output <dir> <identifier>` — pull an OCI-sourced entry |
+| 28 | compare `oci search` (OCI only) against `search` (all sources) |
 
 The OCI mapping is tooling built on top of the specification, not part of it.
 
@@ -120,7 +118,7 @@ The OCI mapping is tooling built on top of the specification, not part of it.
    and a root catalog (agent, model, inline config, nested-catalog reference) —
    all using `file://` URLs so no network is required.
 3. Runs the author commands against the root catalog: prints the catalog first,
-   then demonstrates validation and trust inspection against it.
+   then demonstrates validation against it.
 4. Registers the root catalog with `catalog add`.  The CLI resolves the nested
    catalog reference and caches all entries via content-addressed storage under
    `AI_CATALOG_CACHE_DIR/objects/`.
