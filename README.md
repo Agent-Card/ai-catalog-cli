@@ -145,6 +145,10 @@ cat catalog.json | ai-catalog validate -  # from stdin
 
 Exits with code `0` on success, `1` on validation errors.
 
+With `--json`, each error and warning has a stable `code` (for example
+`entry-duplicate`) next to its `path` and `message`. Match on the code rather
+than the message. `code` is `null` when the input could not be parsed.
+
 ---
 
 ### `format`

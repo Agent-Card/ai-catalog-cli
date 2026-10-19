@@ -75,7 +75,6 @@ impl CacheManager {
                     identifier: None,
                     documentation_url: None,
                     logo_url: None,
-                    trust_manifest: None,
                     extra_fields: Default::default(),
                 }),
                 entries: vec![],

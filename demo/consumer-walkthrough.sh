@@ -322,5 +322,5 @@ echo "--- search embeddings (all sources: CAS + OCI combined) ---"
 echo "    the same entry is listed once per registered source"
 run_cli search --json embeddings | python3 -c "import sys,json; [print(' •', e['identifier']) for e in json.load(sys.stdin).get('entries',[])]"
 
-section "Walkthrough complete — ${step_count} commands, all against released 0.2.0 crates"
+section "Walkthrough complete — ${step_count} commands, all against released 0.3.0 crates"
 echo "all temporary files were cleaned up from $tmp_root" >&2
