@@ -7,7 +7,7 @@
 # Consumer workflow walkthrough for ai-catalog.
 #
 # Covers the full CLI surface:
-#   Author:   validate (text/json/stdin), format, trust inspect (text/json)
+#   Author:   validate (text/json/stdin), format
 #   Consumer: catalog add/list/update/remove, search (text/json/regex/limit),
 #             show (text/json/scoped), pull (inline-data/file-url)
 #
@@ -214,60 +214,51 @@ step "4. Validate from stdin"
 echo_cmd "ai-catalog validate --json - < $(basename "$root_catalog_path")"
 cargo run -q -- validate --json - < "$root_catalog_path"
 
-step "5. Inspect trust manifests (text output)"
-run_cli trust inspect "$root_catalog_path"
-
-step "6. Inspect trust manifests (JSON output)"
-run_cli trust inspect --json "$root_catalog_path"
-
-# ── Consumer commands: catalog management ─────────────────────────────────────
-section "Consumer commands: catalog management"
-
-step "7. Register the catalog (fetches and caches locally)"
+step "5. Register the catalog (fetches and caches locally)"
 run_cli catalog add demo-registry "file://$root_catalog_path"
 
-step "8. List registered catalogs (text)"
+step "6. List registered catalogs (text)"
 run_cli catalog list
 
-step "9. List registered catalogs (JSON)"
+step "7. List registered catalogs (JSON)"
 run_cli catalog list --json
 
 # ── Consumer commands: search ─────────────────────────────────────────────────
 section "Consumer commands: search"
 
-step "10. Search by keyword: 'agent' (text table)"
+step "8. Search by keyword: 'agent' (text table)"
 run_cli search agent
 
-step "11. Search by keyword: 'dataset' (JSON output)"
+step "9. Search by keyword: 'dataset' (JSON output)"
 run_cli search --json dataset
 
-step "12. Search with regex: A2A agents and datasets"
+step "10. Search with regex: A2A agents and datasets"
 run_cli search --regex "urn:demo:(agent|dataset).*"
 
-step "13. Search with result limit (-n 2)"
+step "11. Search with result limit (-n 2)"
 run_cli search -n 2 nlp
 
 # ── Consumer commands: show ───────────────────────────────────────────────────
 section "Consumer commands: show"
 
-step "14. Show entry details (text table): conversational agent"
+step "12. Show entry details (text table): conversational agent"
 run_cli show urn:demo:agent:conversational-v1
 
-step "15. Show entry details (JSON): conversational agent"
+step "13. Show entry details (JSON): conversational agent"
 run_cli show --json urn:demo:agent:conversational-v1
 
-step "16. Show entry scoped to a specific registered catalog"
+step "14. Show entry scoped to a specific registered catalog"
 run_cli show --scope demo-registry urn:demo:dataset:eval-suite-v3
 
 # ── Consumer commands: pull ───────────────────────────────────────────────────
 section "Consumer commands: pull"
 
-step "17. Pull inline-data entry (config) to disk"
+step "15. Pull inline-data entry (config) to disk"
 run_cli pull --output "$pull_dir" urn:demo:config:default-settings
 echo "pulled file:"
 cat "$pull_dir/default-settings.json"
 
-step "18. Pull file-URL entry (eval suite JSONL) to disk"
+step "16. Pull file-URL entry (eval suite JSONL) to disk"
 run_cli pull --output "$pull_dir" urn:demo:dataset:eval-suite-v3
 echo "pulled file:"
 cat "$pull_dir/eval-suite-v3.json"
@@ -275,13 +266,13 @@ cat "$pull_dir/eval-suite-v3.json"
 # ── Consumer commands: update and remove ──────────────────────────────────────
 section "Consumer commands: update and remove"
 
-step "19. Update the catalog (content unchanged — reports 'up to date')"
+step "17. Update the catalog (content unchanged — reports 'up to date')"
 run_cli catalog update demo-registry
 
-step "20. Remove the catalog from the local registry"
+step "18. Remove the catalog from the local registry"
 run_cli catalog remove demo-registry
 
-step "21. List catalogs after removal"
+step "19. List catalogs after removal"
 run_cli catalog list
 
 # ── OCI storage path ──────────────────────────────────────────────────────────
@@ -291,33 +282,33 @@ oci_layout_dir="$tmp_root/oci-layout"
 oci_pull_dir="$tmp_root/oci-pulled"
 mkdir -p "$oci_pull_dir"
 
-step "22. Export the catalog to a standard OCI image layout (no signing required)"
+step "20. Export the catalog to a standard OCI image layout (no signing required)"
 run_cli oci export-layout --tag consumer-demo "$root_catalog_path" "$oci_layout_dir"
 
-step "23. Register the catalog from the OCI layout (oci add)"
+step "21. Register the catalog from the OCI layout (oci add)"
 run_cli oci add demo-oci "$oci_layout_dir" --ref-name consumer-demo
 
-step "24. List all registered catalogs — shows both CAS and OCI sources"
+step "22. List all registered catalogs — shows both CAS and OCI sources"
 run_cli catalog list
 
-step "25. Search only OCI-sourced entries by keyword"
+step "23. Search only OCI-sourced entries by keyword"
 run_cli oci search agent
 
-step "26. Search OCI entries with JSON output"
+step "24. Search OCI entries with JSON output"
 run_cli oci search --json nlp
 
-step "27. Show OCI-sourced entry details (text)"
+step "25. Show OCI-sourced entry details (text)"
 run_cli oci show urn:demo:agent:conversational-v1
 
-step "28. Show OCI-sourced entry details (JSON)"
+step "26. Show OCI-sourced entry details (JSON)"
 run_cli oci show --json urn:demo:model:embeddings-v2
 
-step "29. Pull inline-data OCI entry to disk"
+step "27. Pull inline-data OCI entry to disk"
 run_cli oci pull --output "$oci_pull_dir" urn:demo:config:default-settings
 echo "pulled file:"
 cat "$oci_pull_dir/default-settings.json"
 
-step "30. Compare: regular search finds CAS + OCI entries; oci search finds only OCI"
+step "28. Compare: regular search finds CAS + OCI entries; oci search finds only OCI"
 # Re-register the CAS catalog so both sources are in the registry
 run_cli catalog add demo-registry "file://$root_catalog_path"
 echo
