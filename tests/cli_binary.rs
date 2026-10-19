@@ -762,3 +762,79 @@ fn pull_output_stdout_streams_bytes() {
         serde_json::from_str(&stdout).expect("stdout should be valid JSON");
     assert_eq!(parsed["hello"], "world");
 }
+
+const NESTED_REUSE: &str = r#"{
+  "specVersion": "1.0",
+  "entries": [
+    {"identifier": "urn:air:acme.com:agent:finance", "type": "application/a2a-agent-card+json", "url": "https://acme.com/finance.json"},
+    {"identifier": "urn:air:acme.com:catalog:dept", "type": "application/ai-catalog+json", "data": {
+      "specVersion": "1.0",
+      "entries": [
+        {"identifier": "urn:air:acme.com:agent:finance", "type": "application/a2a-agent-card+json", "url": "https://acme.com/finance.json"}
+      ]
+    }}
+  ]
+}"#;
+
+fn assert_valid_catalog(home: &Path, json: &str) {
+    let out = home.join("emitted.json");
+    fs::write(&out, json).unwrap();
+    let (ok, stdout, stderr) = run(cmd_with_home(home).args(["validate", out.to_str().unwrap()]));
+    assert!(ok, "emitted catalog is invalid: {stdout}{stderr}\n{json}");
+}
+
+#[test]
+fn search_json_is_valid_when_nested_catalog_reuses_an_identifier() {
+    let home = tempfile::TempDir::new().unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("nested.json");
+    fs::write(&path, NESTED_REUSE).unwrap();
+
+    let url = format!("file://{}", path.display());
+    run(cmd_with_home(home.path()).args(["catalog", "add", "demo", &url]));
+
+    let (ok, stdout, _) = run(cmd_with_home(home.path()).args(["search", "--json", "finance"]));
+    assert!(ok);
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_valid_catalog(home.path(), &stdout);
+}
+
+#[test]
+fn catalog_list_json_is_valid_when_the_same_content_is_added_twice() {
+    let home = tempfile::TempDir::new().unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    let first = write_fixture_catalog(dir.path());
+    let copy = dir.path().join("copy.json");
+    fs::write(&copy, FIXTURE_CATALOG).unwrap();
+
+    run(cmd_with_home(home.path()).args(["catalog", "add", "first", &first]));
+    run(cmd_with_home(home.path()).args([
+        "catalog",
+        "add",
+        "second",
+        &format!("file://{}", copy.display()),
+    ]));
+
+    let (ok, stdout, _) = run(cmd_with_home(home.path()).args(["catalog", "list", "--json"]));
+    assert!(ok);
+    assert_valid_catalog(home.path(), &stdout);
+
+    run(cmd_with_home(home.path()).args(["catalog", "update", "second"]));
+    let (_, after, _) = run(cmd_with_home(home.path()).args(["catalog", "list", "--json"]));
+    assert_eq!(identifiers(&stdout), identifiers(&after));
+}
+
+fn identifiers(json: &str) -> Vec<String> {
+    serde_json::from_str::<Value>(json).unwrap()["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["identifier"].as_str().unwrap().to_string())
+        .collect()
+}

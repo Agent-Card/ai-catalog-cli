@@ -9,7 +9,9 @@ use ai_catalog::CatalogEntry;
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::fetch::{build_client, local_path_to_file_url};
-use crate::resolver::{cli_extension, make_entry_extensions, resolve_and_cache};
+use crate::resolver::{
+    cli_extension, make_entry_extensions, registry_identifier, resolve_and_cache,
+};
 
 pub async fn execute(name: &str, url: &str) -> Result<()> {
     let url = local_path_to_file_url(url)?;
@@ -52,7 +54,7 @@ pub async fn execute(name: &str, url: &str) -> Result<()> {
         .clone();
     let entry_count = entries.len();
     let file_url = cache.object_file_url(&root_hash);
-    let identifier = format!("urn:ai-catalog:local:{}", &root_hash[..8]);
+    let identifier = registry_identifier("local", name);
     let extensions = make_entry_extensions(url, &root_hash, entry_count);
     let new_entry = CatalogEntry {
         identifier,

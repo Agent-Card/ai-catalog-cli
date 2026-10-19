@@ -5,13 +5,11 @@
 use colored::Colorize;
 use regex::Regex;
 
-use ai_catalog::AiCatalog;
-
 use crate::cache::CacheManager;
 use crate::error::Result;
 use crate::resolver::resolve_local_oci;
 
-use super::{OutputFormat, search::truncate};
+use super::{OutputFormat, catalog_of, search::truncate};
 
 /// Search entries from OCI-sourced catalogs only (those added via `oci add`).
 pub async fn execute(
@@ -64,14 +62,7 @@ pub async fn execute(
     };
 
     if let OutputFormat::Json = output {
-        let catalog = AiCatalog {
-            spec_version: "1.0".to_string(),
-            host: None,
-            entries: matches.iter().map(|re| re.entry.clone()).collect(),
-            signature: None,
-            extensions: None,
-            extra_fields: Default::default(),
-        };
+        let catalog = catalog_of(matches.iter().map(|re| re.entry.clone()));
         println!("{}", serde_json::to_string_pretty(&catalog)?);
         return Ok(());
     }

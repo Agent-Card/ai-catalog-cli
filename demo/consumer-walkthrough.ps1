@@ -5,7 +5,7 @@
 # Consumer workflow walkthrough for ai-catalog (PowerShell).
 #
 # Covers the full CLI surface:
-#   Author:   validate (text/json/stdin), format, trust inspect (text/json)
+#   Author:   validate (text/json/stdin), format
 #   Consumer: catalog add/list/update/remove, search (text/json/regex/limit),
 #             show (text/json/scoped), pull (inline-data/file-url)
 #
@@ -187,22 +187,14 @@ try {
     Write-Step '4. Format / pretty-print the catalog'
     Invoke-Cli @('format', $rootCatalogPath)
 
-    Write-Step '5. Inspect trust manifests (text output)'
-    Invoke-Cli @('trust', 'inspect', $rootCatalogPath)
-
-    Write-Step '6. Inspect trust manifests (JSON output)'
-    Invoke-Cli @('trust', 'inspect', '--json', $rootCatalogPath)
-
-    # ── Consumer commands: catalog management ──────────────────────────────────
-
-    Write-Step '7. Register the catalog (fetches and caches locally)'
+    Write-Step '5. Register the catalog (fetches and caches locally)'
     $rootCatalogUrl = 'file://' + $rootCatalogPath.Replace('\', '/')
     Invoke-Cli @('catalog', 'add', 'demo-registry', $rootCatalogUrl)
 
-    Write-Step '8. List registered catalogs (text)'
+    Write-Step '6. List registered catalogs (text)'
     Invoke-Cli @('catalog', 'list')
 
-    Write-Step '9. List registered catalogs (JSON)'
+    Write-Step '7. List registered catalogs (JSON)'
     Invoke-Cli @('catalog', 'list', '--json')
 
     # ── Consumer commands: search ──────────────────────────────────────────────
@@ -213,32 +205,32 @@ try {
     Write-Step "11. Search by keyword: 'dataset' (JSON output)"
     Invoke-Cli @('search', '--json', 'dataset')
 
-    Write-Step '12. Search with regex: A2A agents and datasets'
+    Write-Step '10. Search with regex: A2A agents and datasets'
     Invoke-Cli @('search', '--regex', 'urn:demo:(agent|dataset).*')
 
-    Write-Step '13. Search with result limit (-n 2)'
+    Write-Step '11. Search with result limit (-n 2)'
     Invoke-Cli @('search', '-n', '2', 'nlp')
 
     # ── Consumer commands: show ────────────────────────────────────────────────
 
-    Write-Step '14. Show entry details (text table): conversational agent'
+    Write-Step '12. Show entry details (text table): conversational agent'
     Invoke-Cli @('show', 'urn:demo:agent:conversational-v1')
 
-    Write-Step '15. Show entry details (JSON): conversational agent'
+    Write-Step '13. Show entry details (JSON): conversational agent'
     Invoke-Cli @('show', '--json', 'urn:demo:agent:conversational-v1')
 
-    Write-Step '16. Show entry scoped to a specific registered catalog'
+    Write-Step '14. Show entry scoped to a specific registered catalog'
     Invoke-Cli @('show', '--scope', 'demo-registry', 'urn:demo:dataset:eval-suite-v3')
 
     # ── Consumer commands: pull ────────────────────────────────────────────────
 
-    Write-Step '17. Pull inline-data entry (config) to disk'
+    Write-Step '15. Pull inline-data entry (config) to disk'
     Invoke-Cli @('pull', '--output', $pullDir, 'urn:demo:config:default-settings')
     $pulledConfig = Join-Path $pullDir 'default-settings.json'
     Write-Host 'pulled file:'
     Write-Host ([System.IO.File]::ReadAllText($pulledConfig))
 
-    Write-Step '18. Pull file-URL entry (eval suite JSONL) to disk'
+    Write-Step '16. Pull file-URL entry (eval suite JSONL) to disk'
     Invoke-Cli @('pull', '--output', $pullDir, 'urn:demo:dataset:eval-suite-v3')
     $pulledEval = Join-Path $pullDir 'eval-suite-v3.json'
     Write-Host 'pulled file:'
@@ -249,10 +241,10 @@ try {
     Write-Step "19. Update the catalog (content unchanged — reports 'up to date')"
     Invoke-Cli @('catalog', 'update', 'demo-registry')
 
-    Write-Step '20. Remove the catalog from the local registry'
+    Write-Step '18. Remove the catalog from the local registry'
     Invoke-Cli @('catalog', 'remove', 'demo-registry')
 
-    Write-Step '21. List catalogs after removal'
+    Write-Step '19. List catalogs after removal'
     Invoke-Cli @('catalog', 'list')
 
     Write-Step 'Consumer walkthrough complete'

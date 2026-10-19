@@ -52,7 +52,6 @@ pub async fn execute(name: &str) -> Result<()> {
     let file_url = cache.object_file_url(&new_hash);
     let extensions = make_entry_extensions(&source_url, &new_hash, entry_count);
     registry.entries[idx].url = Some(file_url);
-    registry.entries[idx].identifier = format!("urn:ai-catalog:local:{}", &new_hash[..8]);
     registry.entries[idx].updated_at = Some(chrono::Utc::now().to_rfc3339());
     registry.entries[idx].extensions = Some(extensions);
     cache.write_registry(&registry)?;

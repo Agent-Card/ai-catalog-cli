@@ -5,13 +5,11 @@
 use colored::Colorize;
 use regex::Regex;
 
-use ai_catalog::AiCatalog;
-
 use crate::cache::CacheManager;
 use crate::error::Result;
 use crate::resolver::resolve_local;
 
-use super::OutputFormat;
+use super::{OutputFormat, catalog_of};
 
 pub async fn execute(
     keyword: &str,
@@ -61,14 +59,7 @@ pub async fn execute(
             .collect()
     };
     if let OutputFormat::Json = output {
-        let catalog = AiCatalog {
-            spec_version: "1.0".to_string(),
-            host: None,
-            entries: matches.iter().map(|re| re.entry.clone()).collect(),
-            signature: None,
-            extensions: None,
-            extra_fields: Default::default(),
-        };
+        let catalog = catalog_of(matches.iter().map(|re| re.entry.clone()));
         println!("{}", serde_json::to_string_pretty(&catalog)?);
         return Ok(());
     }

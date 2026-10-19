@@ -23,6 +23,15 @@ brew trust Agent-Card/ai-catalog-cli
 brew install ai-catalog
 ```
 
+On Windows, install with [WinGet](https://learn.microsoft.com/windows/package-manager/winget/):
+
+```powershell
+winget install --id AgentCard.AICatalog --exact
+```
+
+Open a new terminal afterwards so the `ai-catalog` command is on your `PATH`.
+Upgrade later with `winget upgrade --id AgentCard.AICatalog --exact`.
+
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
 [release](https://github.com/Agent-Card/ai-catalog-cli/releases). Download the
 archive for your platform, verify it against the accompanying `.sha256` file,
@@ -99,7 +108,6 @@ This CLI builds on the four AI Catalog library crates, released separately from
 ```
 ai-catalog validate [--json] <path|->
 ai-catalog format <path|->
-ai-catalog trust inspect [--json] <path|->
 ai-catalog oci pack <path|->
 ai-catalog oci unpack <path|->
 ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <layout-dir>
@@ -147,22 +155,6 @@ Pretty-prints a catalog document to stdout without modifying the source file.
 ai-catalog format catalog.json
 cat catalog.json | ai-catalog format -
 ```
-
----
-
-### `trust inspect`
-
-Reads and reports on trust manifests declared in a catalog (host and entries).
-Shows identity, presence of a signature, and counts of attestations and
-provenance records. Does not perform cryptographic signature verification.
-
-```sh
-ai-catalog trust inspect catalog.json
-ai-catalog trust inspect --json catalog.json
-```
-
-Exits with code `0` when all findings are clean, `1` when errors are found
-(e.g. identity mismatch, malformed signature, weak digest algorithm).
 
 ---
 
@@ -518,18 +510,17 @@ second layout. Script: [`demo/oci-layout-walkthrough.sh`](demo/oci-layout-walkth
 ### Consumer workflow walkthrough (`just demo-consumer`)
 
 Exercises every author and consumer command without external tools or network
-calls: validate, format, trust inspect, catalog add/list/update/remove, search
+calls: validate, format, catalog add/list/update/remove, search
 (keyword, regex, JSON, limit), show (text, JSON, scoped), pull (inline-data
 and file-URL entries), and the full OCI consumer path (oci add, oci search,
 oci show, oci pull). Script: [`demo/consumer-walkthrough.sh`](demo/consumer-walkthrough.sh).
 
 ### Trust sign & verify walkthrough (`just demo-trust`)
 
-Demonstrates the complete trust manifest lifecycle: validate → `trust inspect`
-(unsigned) → generate Cosign key pair → sign via `oci export-layout
---cosign-key` → `oras discover` referrer tree → extract canonical trust
-manifest and detached signature → `cosign verify-blob` → tamper detection →
-`oci unpack-layout` round-trip. Script: [`demo/trust-walkthrough.sh`](demo/trust-walkthrough.sh).
+Demonstrates the complete trust manifest lifecycle: validate → generate
+Cosign key pair → sign via `oci export-layout --cosign-key` → `oras discover`
+referrer tree → extract canonical trust manifest and detached signature →
+`cosign verify-blob` → tamper detection → `oci unpack-layout` round-trip. Script: [`demo/trust-walkthrough.sh`](demo/trust-walkthrough.sh).
 
 This walkthrough is POSIX only; there is no PowerShell port yet.
 
