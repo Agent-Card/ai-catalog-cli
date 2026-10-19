@@ -167,13 +167,7 @@ cargo run -q -- validate "$catalog_json"
 echo "✓ catalog is spec-compliant"
 
 # ── Step 2 ─────────────────────────────────────────────────────────────────
-step "2. Inspect trust manifests BEFORE signing"
-cargo run -q -- trust inspect "$catalog_json"
-echo
-echo "→ host and first entry have trust manifests; neither has a signature yet"
-
-# ── Step 3 ─────────────────────────────────────────────────────────────────
-step "3. Generate an ephemeral Cosign key pair"
+step "2. Generate an ephemeral Cosign key pair"
 "$COSIGN_BIN" generate-key-pair --output-key-prefix "$cosign_prefix"
 echo
 echo "Generated:"
@@ -181,8 +175,8 @@ echo "  private key : $cosign_key"
 echo "  public key  : $cosign_pub"
 cat "$cosign_pub"
 
-# ── Step 4 ─────────────────────────────────────────────────────────────────
-step "4. Sign — export to OCI image layout with Cosign verification artifacts"
+# ── Step 3 ─────────────────────────────────────────────────────────────────
+step "3. Sign — export to OCI image layout with Cosign verification artifacts"
 cargo run -q -- \
     oci export-layout \
     --tag trust-demo \
@@ -195,8 +189,8 @@ echo
 echo "OCI layout contents:"
 find "$layout_dir" -type f | sort
 
-# ── Step 5 ─────────────────────────────────────────────────────────────────
-step "5. Inspect the root OCI manifest to find the signed entry"
+# ── Step 4 ─────────────────────────────────────────────────────────────────
+step "4. Inspect the root OCI manifest to find the signed entry"
 root_manifest_json="$("$ORAS_BIN" manifest fetch --oci-layout "${layout_dir}:trust-demo")"
 printf '%s\n' "$root_manifest_json"
 
@@ -204,8 +198,8 @@ entry_digest="$(first_digest_in_array "$root_manifest_json" "manifests")"
 echo
 echo "→ signed entry digest: $entry_digest"
 
-# ── Step 6 ─────────────────────────────────────────────────────────────────
-step "6. Discover referrers attached to the signed entry"
+# ── Step 5 ─────────────────────────────────────────────────────────────────
+step "5. Discover referrers attached to the signed entry"
 "$ORAS_BIN" discover \
     --oci-layout "${layout_dir}@${entry_digest}" \
     --format json | tee /dev/null
@@ -215,8 +209,8 @@ step "6. Discover referrers attached to the signed entry"
 echo
 echo "→ three referrers expected: trust-manifest · cosign-signature · cosign-public-key"
 
-# ── Step 7 ─────────────────────────────────────────────────────────────────
-step "7. Extract the canonical trust manifest payload from the OCI layout"
+# ── Step 6 ─────────────────────────────────────────────────────────────────
+step "6. Extract the canonical trust manifest payload from the OCI layout"
 tm_referrer_digest="$(discover_referrer_digest_by_type \
     "${layout_dir}@${entry_digest}" "$TRUST_MANIFEST_ARTIFACT_TYPE")"
 tm_manifest_json="$("$ORAS_BIN" manifest fetch --oci-layout "${layout_dir}@${tm_referrer_digest}")"
@@ -229,8 +223,8 @@ payload_file="$tmp_root/canonical-trust-manifest.json"
 echo "Canonical trust manifest (key-sorted JSON, no 'signature' field):"
 cat "$payload_file"
 
-# ── Step 8 ─────────────────────────────────────────────────────────────────
-step "8. Extract the detached Cosign signature from the OCI layout"
+# ── Step 7 ─────────────────────────────────────────────────────────────────
+step "7. Extract the detached Cosign signature from the OCI layout"
 sig_referrer_digest="$(discover_referrer_digest_by_type \
     "${layout_dir}@${entry_digest}" "$COSIGN_SIGNATURE_ARTIFACT_TYPE")"
 sig_manifest_json="$("$ORAS_BIN" manifest fetch --oci-layout "${layout_dir}@${sig_referrer_digest}")"
@@ -242,8 +236,8 @@ sig_file="$tmp_root/trust-manifest.sig"
 echo "Detached signature (base64):"
 cat "$sig_file"
 
-# ── Step 9 ─────────────────────────────────────────────────────────────────
-step "9. Verify the signature with Cosign"
+# ── Step 8 ─────────────────────────────────────────────────────────────────
+step "8. Verify the signature with Cosign"
 echo "Running: cosign verify-blob --key cosign.pub --signature <sig> <payload>"
 echo
 if "$COSIGN_BIN" verify-blob \
@@ -258,8 +252,8 @@ else
     exit 1
 fi
 
-# ── Step 10 ────────────────────────────────────────────────────────────────
-step "10. Demonstrate tamper detection — modify the payload and re-verify"
+# ── Step 9 ────────────────────────────────────────────────────────────────
+step "9. Demonstrate tamper detection — modify the payload and re-verify"
 tampered_file="$tmp_root/tampered-trust-manifest.json"
 # Replace the identity value with a different string
 sed 's/urn:demo:agent:trusted-v1/urn:attacker:agent:evil/g' "$payload_file" > "$tampered_file"
@@ -280,13 +274,13 @@ else
     echo "✓ Tamper correctly detected — cosign rejected the modified manifest"
 fi
 
-# ── Step 11 ────────────────────────────────────────────────────────────────
-step "11. Inspect trust manifests in the re-imported catalog"
+# ── Step 10 ────────────────────────────────────────────────────────────────
+step "10. Validate the re-imported catalog"
 roundtrip_json="$tmp_root/roundtrip.json"
 cargo run -q -- \
     oci unpack-layout --ref-name trust-demo "$layout_dir" > "$roundtrip_json"
 
-cargo run -q -- trust inspect "$roundtrip_json"
+cargo run -q -- validate "$roundtrip_json"
 echo
 echo "→ trust manifests are preserved after round-trip through OCI"
 echo "→ cosign signature artifacts remain in the OCI layout as referrers"
@@ -295,7 +289,6 @@ echo "   (they are not embedded into the AI Catalog JSON format)"
 step "Walkthrough complete"
 echo "Summary:"
 echo "  catalog validated            ✓"
-echo "  trust manifests inspected    ✓"
 echo "  cosign key pair generated    ✓"
 echo "  trust manifests signed       ✓  (via oci export-layout --cosign-key)"
 echo "  OCI referrer tree discovered ✓  (trust-manifest · signature · public-key)"

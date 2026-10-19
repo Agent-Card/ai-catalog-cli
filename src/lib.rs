@@ -19,10 +19,7 @@ use ai_catalog_oci::{
     OciArtifactSet, attach_cosign_verification_artifacts, export_layout, import_layout,
     pack_catalog, unpack_catalog,
 };
-use ai_catalog_trust::{
-    CatalogTrustReport, Finding as TrustFinding, ManifestReport, Severity, analyze_catalog,
-    canonicalize_trust_manifest,
-};
+use ai_catalog_trust::canonicalize_trust_manifest;
 use ai_catalog_validate::{ConformanceLevel, Diagnostic, validate};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -40,12 +37,6 @@ enum OutputFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ValidateOptions<'a> {
-    output_format: OutputFormat,
-    path: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TrustOptions<'a> {
     output_format: OutputFormat,
     path: &'a str,
 }
@@ -118,7 +109,6 @@ where
         }
         "validate" => validate_command(&remaining, stdin, stdout, stderr),
         "format" => format_command(&remaining, stdin, stdout, stderr),
-        "trust" => trust_command(&remaining, stdin, stdout, stderr),
         "oci" => oci_command(&remaining, stdin, stdout, stderr),
         "catalog" => catalog_command(&remaining, stdout, stderr),
         "search" => search_command(&remaining, stderr),
@@ -421,67 +411,6 @@ fn format_command<R: Read, W: Write, E: Write>(
     writeln!(stdout)?;
 
     Ok(0)
-}
-
-fn trust_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some((subcommand, remaining)) = args.split_first() else {
-        writeln!(stderr, "trust expects a subcommand")?;
-        write_usage(stderr)?;
-        return Ok(2);
-    };
-
-    match subcommand.as_str() {
-        "inspect" => trust_inspect_command(remaining, stdin, stdout, stderr),
-        "help" => {
-            write_usage(stdout)?;
-            Ok(0)
-        }
-        other => {
-            writeln!(stderr, "unknown trust subcommand: {other}")?;
-            write_usage(stderr)?;
-            Ok(2)
-        }
-    }
-}
-
-fn trust_inspect_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some(options) = parse_trust_options(args, stderr)? else {
-        return Ok(2);
-    };
-
-    let catalog = match read_catalog(options.path, stdin) {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            write_parse_error(options.output_format, options.path, error, stdout, stderr)?;
-            return Ok(1);
-        }
-    };
-
-    let report = analyze_catalog(&catalog);
-    let has_errors = trust_report_has_errors(&report);
-
-    match options.output_format {
-        OutputFormat::Text => {
-            if has_errors {
-                write_trust_report(stderr, &report)?;
-            } else {
-                write_trust_report(stdout, &report)?;
-            }
-        }
-        OutputFormat::Json => write_trust_report_json(stdout, &report)?,
-    }
-
-    Ok(if has_errors { 1 } else { 0 })
 }
 
 fn oci_command<R: Read, W: Write, E: Write>(
@@ -1064,50 +993,6 @@ fn parse_validate_options<'a>(
     }
 }
 
-fn parse_trust_options<'a>(
-    args: &'a [String],
-    stderr: &mut impl Write,
-) -> io::Result<Option<TrustOptions<'a>>> {
-    let mut output_format = OutputFormat::Text;
-    let mut path = None;
-
-    for arg in args {
-        match arg.as_str() {
-            "--json" => output_format = OutputFormat::Json,
-            "-" => {
-                if path.replace(arg.as_str()).is_some() {
-                    writeln!(stderr, "trust inspect expects exactly one <path> argument")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                }
-            }
-            value if value.starts_with('-') => {
-                writeln!(stderr, "unknown trust inspect option: {value}")?;
-                write_usage(stderr)?;
-                return Ok(None);
-            }
-            value => {
-                if path.replace(value).is_some() {
-                    writeln!(stderr, "trust inspect expects exactly one <path> argument")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                }
-            }
-        }
-    }
-
-    if let Some(path) = path {
-        Ok(Some(TrustOptions {
-            output_format,
-            path,
-        }))
-    } else {
-        writeln!(stderr, "trust inspect expects exactly one <path> argument")?;
-        write_usage(stderr)?;
-        Ok(None)
-    }
-}
-
 fn parse_oci_export_layout_options<'a>(
     args: &'a [String],
     stderr: &mut impl Write,
@@ -1381,7 +1266,6 @@ fn write_usage(writer: &mut impl Write) -> io::Result<()> {
     writeln!(writer, "Usage:")?;
     writeln!(writer, "  {BIN_NAME} validate [--json] <path|->")?;
     writeln!(writer, "  {BIN_NAME} format <path|->")?;
-    writeln!(writer, "  {BIN_NAME} trust inspect [--json] <path|->")?;
     writeln!(writer, "  {BIN_NAME} oci pack <path|->")?;
     writeln!(writer, "  {BIN_NAME} oci unpack <path|->")?;
     writeln!(
@@ -1766,110 +1650,6 @@ fn parse_error_message(path: &str, error: &ai_catalog::Error) -> String {
     }
 }
 
-fn write_trust_report(writer: &mut impl Write, report: &CatalogTrustReport) -> io::Result<()> {
-    let status = if trust_report_has_errors(report) {
-        "errors found"
-    } else if report.findings.is_empty() {
-        "ok"
-    } else {
-        "warnings found"
-    };
-
-    writeln!(writer, "trust report: {status}")?;
-
-    if report.host.is_none() && report.entries.is_empty() {
-        writeln!(writer, "no trust manifests found")?;
-        return Ok(());
-    }
-
-    if let Some(host) = &report.host {
-        write_manifest_report(writer, "host", host)?;
-    }
-
-    for entry in &report.entries {
-        write_manifest_report(writer, "entry", entry)?;
-    }
-
-    Ok(())
-}
-
-fn write_manifest_report(
-    writer: &mut impl Write,
-    label: &str,
-    report: &ManifestReport,
-) -> io::Result<()> {
-    writeln!(writer, "{label}: {}", report.path)?;
-    writeln!(writer, "  identity: {}", report.identity)?;
-    writeln!(
-        writer,
-        "  signature: {}",
-        if report.has_signature {
-            "present"
-        } else {
-            "absent"
-        }
-    )?;
-    writeln!(writer, "  attestations: {}", report.attestation_count)?;
-    writeln!(writer, "  provenance: {}", report.provenance_count)?;
-
-    for finding in &report.findings {
-        writeln!(
-            writer,
-            "  - {} {}: {}",
-            severity_name(finding.severity),
-            finding.path,
-            finding.message
-        )?;
-    }
-
-    Ok(())
-}
-
-fn write_trust_report_json(stdout: &mut impl Write, report: &CatalogTrustReport) -> io::Result<()> {
-    let payload = json!({
-        "ok": !trust_report_has_errors(report),
-        "findings": report.findings.iter().map(trust_finding_to_json).collect::<Vec<_>>(),
-        "host": report.host.as_ref().map(trust_manifest_report_to_json),
-        "entries": report.entries.iter().map(trust_manifest_report_to_json).collect::<Vec<_>>(),
-    });
-
-    serde_json::to_writer_pretty(&mut *stdout, &payload).map_err(io::Error::other)?;
-    writeln!(stdout)
-}
-
-fn trust_manifest_report_to_json(report: &ManifestReport) -> serde_json::Value {
-    json!({
-        "path": report.path,
-        "identity": report.identity,
-        "hasSignature": report.has_signature,
-        "attestationCount": report.attestation_count,
-        "provenanceCount": report.provenance_count,
-        "findings": report.findings.iter().map(trust_finding_to_json).collect::<Vec<_>>(),
-    })
-}
-
-fn trust_finding_to_json(finding: &TrustFinding) -> serde_json::Value {
-    json!({
-        "severity": severity_name(finding.severity),
-        "path": finding.path,
-        "message": finding.message,
-    })
-}
-
-fn trust_report_has_errors(report: &CatalogTrustReport) -> bool {
-    report
-        .findings
-        .iter()
-        .any(|finding| finding.severity == Severity::Error)
-}
-
-fn severity_name(severity: Severity) -> &'static str {
-    match severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-    }
-}
-
 fn input_label(path: &str) -> String {
     if path == "-" {
         "stdin".to_owned()
@@ -1911,7 +1691,6 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(stdout.contains("Usage:"));
         assert!(stdout.contains("validate [--json] <path|->"));
-        assert!(stdout.contains("trust inspect [--json] <path|->"));
         assert!(stdout.contains("oci pack <path|->"));
         assert!(stdout.contains("oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <layout-dir>"));
         assert!(stdout.contains("oci unpack-layout [--ref-name <name>] <layout-dir>"));
@@ -2124,53 +1903,6 @@ mod tests {
         assert_eq!(exit_code, 2);
         assert!(stdout.is_empty());
         assert!(stderr.contains("unknown command: bogus"));
-    }
-
-    #[test]
-    fn trust_inspect_reports_clean_catalog() {
-        let fixture = canonical_fixture_text();
-        let (exit_code, stdout, stderr) =
-            run_command(["ai-catalog-cli", "trust", "inspect", "-"], &fixture);
-
-        assert_eq!(exit_code, 0);
-        assert!(stdout.contains("trust report: ok"));
-        assert!(stdout.contains("no trust manifests found"));
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn trust_inspect_reports_findings_as_json() {
-        let invalid_fixture = r#"{
-    "specVersion": "1.0",
-    "entries": [
-        {
-            "identifier": "urn:example:model",
-            "displayName": "Example Model",
-            "type": "application/json",
-            "url": "https://example.com/model.json",
-            "trustManifest": {
-                "identity": "plain-identifier",
-                "signature": "header.payload.signature"
-            }
-        }
-    ]
-}"#;
-        let (exit_code, stdout, stderr) = run_command(
-            ["ai-catalog-cli", "trust", "inspect", "--json", "-"],
-            invalid_fixture,
-        );
-        let payload: Value = serde_json::from_str(&stdout).expect("stdout should be valid json");
-
-        assert_eq!(exit_code, 1);
-        assert_eq!(payload["ok"], false);
-        assert!(
-            payload["findings"]
-                .as_array()
-                .expect("findings should be an array")
-                .iter()
-                .any(|finding| finding["severity"] == "error")
-        );
-        assert!(stderr.is_empty());
     }
 
     #[test]

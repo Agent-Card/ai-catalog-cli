@@ -209,15 +209,6 @@ ai-catalog oci show <identifier> [--media-type <mime>]
 ai-catalog oci pull <identifier> -o <dir> [--media-type <mime>]
 ```
 
-## Trust inspection
-
-```bash
-ai-catalog trust inspect <path|->        # show trust report (identity, signatures, attestations)
-ai-catalog trust inspect --json <path|-> # machine-readable report
-```
-
-Exit code 0 = clean, 1 = errors found (identity mismatch, malformed signature, weak digest).
-
 ## Environment variables
 
 | Variable | Description | Default |
@@ -232,5 +223,5 @@ Exit code 0 = clean, 1 = errors found (identity mismatch, malformed signature, w
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Validation/trust errors, parse failures, runtime errors |
+| 1 | Validation errors, parse failures, runtime errors |
 | 2 | Usage errors (missing arguments, unknown options) |
