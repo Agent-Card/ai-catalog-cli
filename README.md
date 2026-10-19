@@ -23,6 +23,15 @@ brew trust Agent-Card/ai-catalog-cli
 brew install ai-catalog
 ```
 
+On Windows, install with [WinGet](https://learn.microsoft.com/windows/package-manager/winget/):
+
+```powershell
+winget install --id AgentCard.AICatalog --exact
+```
+
+Open a new terminal afterwards so the `ai-catalog` command is on your `PATH`.
+Upgrade later with `winget upgrade --id AgentCard.AICatalog --exact`.
+
 Prebuilt binaries for Linux, macOS, and Windows are attached to each
 [release](https://github.com/Agent-Card/ai-catalog-cli/releases). Download the
 archive for your platform, verify it against the accompanying `.sha256` file,
