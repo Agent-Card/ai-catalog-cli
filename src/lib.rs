@@ -380,8 +380,8 @@ fn validate_command<R: Read, W: Write, E: Write>(
                 stdout,
                 result.is_valid,
                 Some(result.conformance_level),
-                &result.errors,
-                &result.warnings,
+                diagnostics_to_json(&result.errors),
+                diagnostics_to_json(&result.warnings),
             )?;
 
             Ok(if result.is_valid { 0 } else { 1 })
@@ -1603,11 +1603,12 @@ fn write_parse_error(
             stdout,
             false,
             None,
-            &[Diagnostic {
-                path: path.to_owned(),
-                message: format!("failed to parse input: {error}"),
-            }],
-            &[],
+            vec![json!({
+                "code": null,
+                "path": path,
+                "message": format!("failed to parse input: {error}"),
+            })],
+            Vec::new(),
         ),
     }
 }
@@ -1616,14 +1617,14 @@ fn write_validation_result_json(
     stdout: &mut impl Write,
     is_valid: bool,
     conformance_level: Option<ConformanceLevel>,
-    errors: &[Diagnostic],
-    warnings: &[Diagnostic],
+    errors: Vec<serde_json::Value>,
+    warnings: Vec<serde_json::Value>,
 ) -> io::Result<()> {
     let payload = json!({
         "valid": is_valid,
         "conformanceLevel": conformance_level.map(conformance_level_name),
-        "errors": diagnostics_to_json(errors),
-        "warnings": diagnostics_to_json(warnings),
+        "errors": errors,
+        "warnings": warnings,
     });
 
     serde_json::to_writer_pretty(&mut *stdout, &payload).map_err(io::Error::other)?;
@@ -1635,6 +1636,7 @@ fn diagnostics_to_json(diagnostics: &[Diagnostic]) -> Vec<serde_json::Value> {
         .iter()
         .map(|diagnostic| {
             json!({
+                "code": diagnostic.code.as_str(),
                 "path": diagnostic.path,
                 "message": diagnostic.message,
             })
@@ -1840,10 +1842,11 @@ mod tests {
                 .as_array()
                 .expect("errors should be an array")
                 .iter()
-                .any(|diagnostic| diagnostic["message"]
-                    .as_str()
-                    .expect("message should be a string")
-                    .contains("exactly one of 'url' or 'data', found both"))
+                .any(|diagnostic| diagnostic["code"] == "entry-artifact-source"
+                    && diagnostic["message"]
+                        .as_str()
+                        .expect("message should be a string")
+                        .contains("exactly one of 'url' or 'data', found both"))
         );
         assert!(stderr.is_empty());
     }
@@ -1872,7 +1875,7 @@ mod tests {
                 .as_array()
                 .expect("errors should be an array")
                 .iter()
-                .any(|diagnostic| diagnostic["path"] == "-")
+                .any(|diagnostic| diagnostic["path"] == "-" && diagnostic["code"].is_null())
         );
         assert!(stderr.is_empty());
     }
