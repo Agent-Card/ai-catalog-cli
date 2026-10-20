@@ -20,9 +20,12 @@ use ai_catalog::{AiCatalog, CatalogEntry};
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::resolver::{cli_extension, find_entry_by_id_in_url, resolve_and_cache};
+use crate::resolver::{REGISTRY, ResolvedEntry, Resolver, cli_extension};
 
 pub const CATALOG_MIME_TYPE: &str = "application/ai-catalog+json";
+
+/// Registry identifier prefix of catalogs registered from an OCI image layout.
+pub const OCI_PREFIX: &str = "urn:ai-catalog:oci:";
 
 /// Wrap search results in a catalog. Nested catalogs may legally reuse an
 /// identifier, so the flattened list is de-duplicated to keep the document
@@ -49,48 +52,84 @@ pub enum OutputFormat {
     Json,
 }
 
-/// Resolve an entry within a specific scope (registered catalog name or URI).
-pub(crate) async fn find_entry_in_scope(
+/// Resolve an entry within a specific scope: a registered catalog (by name or
+/// source), or a catalog URL, which is fetched and cached on the way.
+pub(crate) fn find_entry_in_scope(
     identifier: &str,
     scope: &str,
     cache: &CacheManager,
-    client: &reqwest::Client,
-) -> Result<Option<CatalogEntry>> {
+) -> Result<Option<ResolvedEntry>> {
     if scope.contains("://") {
-        if scope.starts_with("file://") {
-            find_entry_by_id_in_url(identifier, scope, cache)
-        } else {
-            cache.ensure_dirs()?;
-            resolve_and_cache(scope, client, cache).await?;
-            let url_to_hash = cache.read_refs()?;
-            if let Some(hash) = url_to_hash.get(scope) {
-                find_entry_by_id_in_url(identifier, &cache.object_file_url(hash), cache)
-            } else {
-                Ok(None)
-            }
-        }
-    } else {
-        let registry = cache.read_registry()?;
-        let catalog_entry = registry.entries.iter().find(|e| {
+        let mut resolver = Resolver::online(cache)?;
+        resolver.fetch(scope)?;
+        return Ok(resolver
+            .into_found()
+            .into_iter()
+            .find(|f| f.entry.identifier == identifier));
+    }
+    let registry = cache.read_registry()?;
+    let catalog_entry = registry
+        .entries
+        .iter()
+        .find(|e| {
             e.display_name
                 .as_deref()
-                .map(|n| n.eq_ignore_ascii_case(scope))
-                .unwrap_or(false)
+                .is_some_and(|n| n.eq_ignore_ascii_case(scope))
                 || cli_extension(e)
                     .and_then(|m| m.get("sourceUrl"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.eq_ignore_ascii_case(scope))
-                    .unwrap_or(false)
-        });
-        let catalog_entry = catalog_entry.ok_or_else(|| {
+                    .is_some_and(|s| s.eq_ignore_ascii_case(scope))
+        })
+        .ok_or_else(|| {
             Error::CatalogNotFound(format!(
                 "no catalog matching \"{scope}\" found. Use `ai-catalog catalog list` to see registered catalogs."
             ))
         })?;
-        let file_url = catalog_entry
-            .url
-            .as_deref()
-            .ok_or_else(|| Error::Other(format!("catalog \"{scope}\" has no local file URL")))?;
-        find_entry_by_id_in_url(identifier, file_url, cache)
-    }
+    let mut resolver = Resolver::offline(cache)?;
+    resolver.descend(catalog_entry, REGISTRY)?;
+    Ok(resolver
+        .into_found()
+        .into_iter()
+        .find(|f| f.entry.identifier == identifier))
+}
+
+/// Find an entry by identifier in the registered catalogs, catalogs included.
+pub(crate) fn find_entry_in_registry(
+    identifier: &str,
+    cache: &CacheManager,
+    prefix: Option<&str>,
+) -> Result<Option<ResolvedEntry>> {
+    let mut resolver = Resolver::offline(cache)?;
+    resolver.walk_registry(prefix)?;
+    Ok(resolver.into_found().into_iter().find(|f| {
+        f.entry.identifier == identifier && (prefix.is_none() || f.source_catalog_url != REGISTRY)
+    }))
+}
+
+/// The entries that are not catalogs, of the registered catalogs.
+pub(crate) fn leaf_entries_in_registry(
+    cache: &CacheManager,
+    prefix: Option<&str>,
+) -> Result<Vec<ResolvedEntry>> {
+    let mut resolver = Resolver::offline(cache)?;
+    resolver.walk_registry(prefix)?;
+    Ok(resolver
+        .into_found()
+        .into_iter()
+        .filter(|f| !f.entry.is_nested_catalog())
+        .collect())
+}
+
+/// The entries that are not catalogs, of the catalog `entry` points to or embeds.
+pub(crate) fn leaf_entries_of(
+    found: &ResolvedEntry,
+    cache: &CacheManager,
+) -> Result<Vec<ResolvedEntry>> {
+    let mut resolver = Resolver::offline(cache)?;
+    resolver.descend(&found.entry, &found.source_catalog_url)?;
+    Ok(resolver
+        .into_found()
+        .into_iter()
+        .filter(|f| !f.entry.is_nested_catalog())
+        .collect())
 }

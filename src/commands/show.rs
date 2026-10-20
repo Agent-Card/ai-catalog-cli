@@ -4,14 +4,13 @@
 
 use colored::Colorize;
 
-use ai_catalog::CatalogEntry;
-
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::fetch::build_client;
-use crate::resolver::{catalog_leaf_entries_for_entry, find_entry_by_id_in_registry};
+use crate::resolver::ResolvedEntry;
 
-use super::{CATALOG_MIME_TYPE, OutputFormat, find_entry_in_scope};
+use super::{
+    CATALOG_MIME_TYPE, OutputFormat, find_entry_in_registry, find_entry_in_scope, leaf_entries_of,
+};
 
 /// Show full details of a catalog entry by identifier.
 ///
@@ -19,34 +18,34 @@ use super::{CATALOG_MIME_TYPE, OutputFormat, find_entry_in_scope};
 /// `media_type` disambiguates when the entry resolves to a catalog:
 ///   - None or "application/ai-catalog+json" → show the catalog entry itself
 ///   - other → find the single child entry of that type and show it
-pub async fn execute(
+pub fn execute(
     identifier: &str,
     output: OutputFormat,
     scope: Option<&str>,
     media_type: Option<&str>,
 ) -> Result<()> {
     let cache = CacheManager::new()?;
-    let client = build_client()?;
 
-    let entry = if let Some(scope_val) = scope {
-        find_entry_in_scope(identifier, scope_val, &cache, &client).await?
+    let found = if let Some(scope_val) = scope {
+        find_entry_in_scope(identifier, scope_val, &cache)?
     } else {
-        find_entry_by_id_in_registry(identifier, &cache)?
+        find_entry_in_registry(identifier, &cache, None)?
     };
 
-    let entry = entry.ok_or_else(|| Error::EntryNotFound(identifier.to_string()))?;
+    let found = found.ok_or_else(|| Error::EntryNotFound(identifier.to_string()))?;
 
-    dispatch_show_entry(&entry, output, media_type, &cache).await
+    dispatch_show_entry(&found, output, media_type, &cache)
 }
 
 /// Core dispatch: handle media_type gating and catalog-vs-leaf branching.
 /// Also used by `oci_show`.
-pub(crate) async fn dispatch_show_entry(
-    entry: &CatalogEntry,
+pub(crate) fn dispatch_show_entry(
+    found: &ResolvedEntry,
     output: OutputFormat,
     media_type: Option<&str>,
     cache: &CacheManager,
 ) -> Result<()> {
+    let entry = &found.entry;
     if !entry.is_nested_catalog() {
         // Leaf entry — check media_type guard
         if let Some(mt) = media_type
@@ -57,21 +56,21 @@ pub(crate) async fn dispatch_show_entry(
                 entry.identifier, entry.entry_type, mt
             )));
         }
-        return print_entry(entry, &output, cache);
+        return print_entry(found, &output, cache);
     }
 
     // Catalog entry — branch on --media-type
     match media_type {
-        None | Some(CATALOG_MIME_TYPE) => print_entry(entry, &output, cache),
+        None | Some(CATALOG_MIME_TYPE) => print_entry(found, &output, cache),
         Some(mt) => {
-            let leaves = catalog_leaf_entries_for_entry(entry, cache)?;
+            let leaves = leaf_entries_of(found, cache)?;
             let matches: Vec<&_> = leaves.iter().filter(|e| e.entry.entry_type == mt).collect();
             match matches.len() {
                 0 => Err(Error::EntryNotFound(format!(
                     "no entries of type \"{mt}\" found in catalog \"{}\"",
                     entry.identifier
                 ))),
-                1 => print_entry(&matches[0].entry, &output, cache),
+                1 => print_entry(matches[0], &output, cache),
                 n => Err(Error::Other(format!(
                     "{n} entries of type \"{mt}\" found in catalog \"{}\"; \
                      use --scope to narrow the search",
@@ -82,16 +81,17 @@ pub(crate) async fn dispatch_show_entry(
     }
 }
 
-fn print_entry(entry: &CatalogEntry, output: &OutputFormat, cache: &CacheManager) -> Result<()> {
+fn print_entry(found: &ResolvedEntry, output: &OutputFormat, cache: &CacheManager) -> Result<()> {
     if let OutputFormat::Json = output {
-        println!("{}", serde_json::to_string_pretty(entry)?);
+        println!("{}", serde_json::to_string_pretty(&found.entry)?);
         return Ok(());
     }
-    print_entry_table(entry, cache);
+    print_entry_table(found, cache);
     Ok(())
 }
 
-pub(crate) fn print_entry_table(entry: &CatalogEntry, cache: &CacheManager) {
+fn print_entry_table(found: &ResolvedEntry, cache: &CacheManager) {
+    let entry = &found.entry;
     println!("{}", "─".repeat(60));
     println!("  {}  {}", "Identifier:".bold(), entry.identifier);
     if let Some(name) = &entry.display_name {
@@ -145,14 +145,14 @@ pub(crate) fn print_entry_table(entry: &CatalogEntry, cache: &CacheManager) {
 
     // If this is a nested catalog entry, show its leaf entries
     if entry.is_nested_catalog() {
-        print_nested_catalog_entries(entry, cache);
+        print_nested_catalog_entries(found, cache);
     }
 
     println!("{}", "─".repeat(60));
 }
 
-fn print_nested_catalog_entries(entry: &CatalogEntry, cache: &CacheManager) {
-    let leaf_entries = match catalog_leaf_entries_for_entry(entry, cache) {
+fn print_nested_catalog_entries(found: &ResolvedEntry, cache: &CacheManager) {
+    let leaf_entries = match leaf_entries_of(found, cache) {
         Ok(e) => e,
         Err(_) => return,
     };

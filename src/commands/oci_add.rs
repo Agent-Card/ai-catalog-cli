@@ -16,7 +16,7 @@ use crate::resolver::{CLI_EXTENSION_KEY, make_entry_extensions, registry_identif
 /// The layout is imported with `import_layout`, the catalog is unpacked,
 /// serialized, stored in the CAS, and registered with an `urn:ai-catalog:oci:`
 /// prefix so the `oci search/show/pull` commands can scope to it.
-pub async fn execute(name: &str, layout_path: &str, ref_name: Option<&str>) -> Result<()> {
+pub fn execute(name: &str, layout_path: &str, ref_name: Option<&str>) -> Result<()> {
     let tag = ref_name.unwrap_or("latest");
 
     let artifacts = import_layout(layout_path, ref_name).map_err(|e| {

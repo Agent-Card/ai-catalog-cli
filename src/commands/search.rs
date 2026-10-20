@@ -5,20 +5,13 @@
 use colored::Colorize;
 use regex::Regex;
 
+use super::{OutputFormat, catalog_of, leaf_entries_in_registry};
 use crate::cache::CacheManager;
 use crate::error::Result;
-use crate::resolver::resolve_local;
 
-use super::{OutputFormat, catalog_of};
-
-pub async fn execute(
-    keyword: &str,
-    use_regex: bool,
-    limit: usize,
-    output: OutputFormat,
-) -> Result<()> {
+pub fn execute(keyword: &str, use_regex: bool, limit: usize, output: OutputFormat) -> Result<()> {
     let cache = CacheManager::new()?;
-    let entries = resolve_local(&cache).await?;
+    let entries = leaf_entries_in_registry(&cache, None)?;
     let matches: Vec<_> = if use_regex {
         let re = Regex::new(keyword)?;
         entries

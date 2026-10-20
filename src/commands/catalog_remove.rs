@@ -8,7 +8,7 @@ use crate::cache::CacheManager;
 use crate::error::{Error, Result};
 use crate::resolver::cli_extension;
 
-pub async fn execute(name_or_url: &str) -> Result<()> {
+pub fn execute(name_or_url: &str) -> Result<()> {
     let cache = CacheManager::new()?;
     let mut registry = cache.read_registry()?;
     let pos = registry.entries.iter().position(|e| {

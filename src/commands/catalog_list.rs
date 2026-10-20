@@ -10,7 +10,7 @@ use crate::resolver::cli_extension;
 
 use super::OutputFormat;
 
-pub async fn execute(output: OutputFormat) -> Result<()> {
+pub fn execute(output: OutputFormat) -> Result<()> {
     let cache = CacheManager::new()?;
     let registry = cache.read_registry()?;
 
