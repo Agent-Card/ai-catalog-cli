@@ -24,6 +24,7 @@ ai-catalog-oci = "0.3.0"
 ai-catalog-trust = "0.3.0"
 ai-catalog-validate = "0.3.0"
 chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
 colored = "3"
 dirs = "7"
 hex = "0.4"

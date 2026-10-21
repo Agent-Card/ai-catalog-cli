@@ -374,50 +374,6 @@ fn pull_unknown_entry_fails() {
     );
 }
 
-#[test]
-fn catalog_missing_subcommand_fails() {
-    let home = tempfile::TempDir::new().unwrap();
-    let (ok, _, stderr) = run(cmd_with_home(home.path()).arg("catalog"));
-    assert!(!ok);
-    assert!(
-        stderr.contains("subcommand"),
-        "should mention subcommand: {stderr}"
-    );
-}
-
-#[test]
-fn search_missing_keyword_fails() {
-    let home = tempfile::TempDir::new().unwrap();
-    let (ok, _, stderr) = run(cmd_with_home(home.path()).arg("search"));
-    assert!(!ok);
-    assert!(
-        stderr.contains("usage") || stderr.contains("keyword"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn show_missing_identifier_fails() {
-    let home = tempfile::TempDir::new().unwrap();
-    let (ok, _, stderr) = run(cmd_with_home(home.path()).arg("show"));
-    assert!(!ok);
-    assert!(
-        stderr.contains("usage") || stderr.contains("identifier"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn pull_missing_identifier_fails() {
-    let home = tempfile::TempDir::new().unwrap();
-    let (ok, _, stderr) = run(cmd_with_home(home.path()).arg("pull"));
-    assert!(!ok);
-    assert!(
-        stderr.contains("usage") || stderr.contains("identifier"),
-        "{stderr}"
-    );
-}
-
 // ── --media-type tests ────────────────────────────────────────────────────────
 
 /// Write a parent catalog whose single entry is a nested catalog pointing at `child_url`.

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod cache;
+mod cli;
 pub mod commands;
 pub mod error;
 pub mod fetch;
@@ -11,21 +12,21 @@ pub mod resolver;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ai_catalog::{AiCatalog, parse_file, parse_reader, write_writer};
+use clap::{CommandFactory, Parser};
+
 use ai_catalog_oci::{
     OciArtifactSet, attach_cosign_verification_artifacts, export_layout, import_layout,
     pack_catalog, unpack_catalog,
 };
 use ai_catalog_trust::canonicalize_trust_manifest;
 use ai_catalog_validate::{ConformanceLevel, Diagnostic, validate};
+use cli::{CatalogCommand, Cli, Command, OciCommand, PublishArgs, SearchArgs};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
-const BIN_NAME: &str = "ai-catalog";
-const DEFAULT_OCI_LAYOUT_TAG: &str = "latest";
 const ORAS_BIN_ENV: &str = "AI_CATALOG_ORAS_BIN";
 const COSIGN_BIN_ENV: &str = "AI_CATALOG_COSIGN_BIN";
 
@@ -35,37 +36,11 @@ enum OutputFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ValidateOptions<'a> {
-    output_format: OutputFormat,
-    path: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OciExportLayoutOptions<'a> {
-    path: &'a str,
-    layout_path: &'a str,
-    tag: &'a str,
-    cosign_key: Option<&'a str>,
-    cosign_public_key: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OciUnpackLayoutOptions<'a> {
-    layout_path: &'a str,
-    ref_name: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OciPushOptions<'a> {
-    path: &'a str,
-    target: &'a str,
-    tag: &'a str,
-    to_oci_layout_path: Option<&'a str>,
-    plain_http: bool,
-    insecure: bool,
-    cosign_key: Option<&'a str>,
-    cosign_public_key: Option<&'a str>,
+/// The streams a command reads from and writes to.
+pub struct Io<'a> {
+    pub stdin: &'a mut dyn Read,
+    pub out: &'a mut dyn Write,
+    pub err: &'a mut dyn Write,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -88,272 +63,199 @@ where
     W: Write,
     E: Write,
 {
-    let mut args = args.into_iter();
-    let _program = args.next();
+    let mut io = Io {
+        stdin,
+        out: stdout,
+        err: stderr,
+    };
 
-    let Some(command) = args.next().map(|arg| arg.as_ref().to_owned()) else {
-        print_help(stdout)?;
+    let cli = match Cli::try_parse_from(args.into_iter().map(|arg| arg.as_ref().to_owned())) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let rendered = error.render();
+            if error.use_stderr() {
+                write!(io.err, "{rendered}")?;
+            } else {
+                write!(io.out, "{rendered}")?;
+            }
+            return Ok(error.exit_code());
+        }
+    };
+
+    let Some(command) = cli.command else {
+        writeln!(io.out, "{}", Cli::command().render_help())?;
         return Ok(0);
     };
 
-    let remaining: Vec<String> = args.map(|arg| arg.as_ref().to_owned()).collect();
-
-    match command.as_str() {
-        "help" | "--help" | "-h" => {
-            print_help(stdout)?;
-            Ok(0)
-        }
-        "version" | "--version" | "-V" => {
-            writeln!(stdout, "{BIN_NAME} {}", env!("CARGO_PKG_VERSION"))?;
-            Ok(0)
-        }
-        "validate" => validate_command(&remaining, stdin, stdout, stderr),
-        "format" => format_command(&remaining, stdin, stdout, stderr),
-        "oci" => oci_command(&remaining, stdin, stdout, stderr),
-        "catalog" => catalog_command(&remaining, stdout, stderr),
-        "search" => search_command(&remaining, stderr),
-        "show" => show_command(&remaining, stderr),
-        "pull" => pull_command(&remaining, stderr),
-        other => {
-            writeln!(stderr, "unknown command: {other}")?;
-            write_usage(stderr)?;
-            Ok(2)
-        }
-    }
-}
-
-fn consumer_error_to_io(err: error::Error, stderr: &mut impl Write) -> io::Result<i32> {
-    writeln!(stderr, "error: {err}")?;
-    Ok(1)
-}
-
-fn catalog_command<W: Write, E: Write>(
-    args: &[String],
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some((subcommand, remaining)) = args.split_first() else {
-        writeln!(
-            stderr,
-            "catalog expects a subcommand: add, list, remove, update"
-        )?;
-        write_usage(stderr)?;
-        return Ok(2);
-    };
-    match subcommand.as_str() {
-        "add" => {
-            if remaining.len() < 2 {
-                writeln!(stderr, "usage: {BIN_NAME} catalog add <name> <url>")?;
-                return Ok(2);
-            }
-            match commands::catalog_add::execute(&remaining[0], &remaining[1]) {
-                Ok(()) => Ok(0),
-                Err(e) => consumer_error_to_io(e, stderr),
-            }
-        }
-        "list" => {
-            let is_json = remaining.iter().any(|a| a == "--json" || a == "-j");
-            let fmt = if is_json {
-                commands::OutputFormat::Json
-            } else {
-                commands::OutputFormat::Table
-            };
-            match commands::catalog_list::execute(fmt) {
-                Ok(()) => Ok(0),
-                Err(e) => consumer_error_to_io(e, stderr),
-            }
-        }
-        "remove" => {
-            if remaining.is_empty() {
-                writeln!(stderr, "usage: {BIN_NAME} catalog remove <name-or-url>")?;
-                return Ok(2);
-            }
-            match commands::catalog_remove::execute(&remaining[0]) {
-                Ok(()) => Ok(0),
-                Err(e) => consumer_error_to_io(e, stderr),
-            }
-        }
-        "update" => {
-            if remaining.is_empty() {
-                writeln!(stderr, "usage: {BIN_NAME} catalog update <name>")?;
-                return Ok(2);
-            }
-            match commands::catalog_update::execute(&remaining[0]) {
-                Ok(()) => Ok(0),
-                Err(e) => consumer_error_to_io(e, stderr),
-            }
-        }
-        "help" => {
-            write_usage(stdout)?;
-            Ok(0)
-        }
-        other => {
-            writeln!(stderr, "unknown catalog subcommand: {other}")?;
-            write_usage(stderr)?;
-            Ok(2)
-        }
-    }
-}
-
-fn search_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut keyword = None;
-    let mut use_regex = false;
-    let mut limit = 50usize;
-    let mut is_json = false;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--regex" | "-r" => use_regex = true,
-            "--json" | "-j" => is_json = true,
-            "-n" | "--limit" => {
-                if let Some(v) = iter.next() {
-                    limit = v.parse().unwrap_or(limit);
+    match command {
+        Command::Validate { path, json } => validate_command(&path, json, &mut io),
+        Command::Format { path } => format_command(&path, &mut io),
+        Command::Oci { command } => oci_command(command, &mut io),
+        Command::Catalog { command } => {
+            let result = match command {
+                CatalogCommand::Add { name, url } => commands::catalog_add::execute(&name, &url),
+                CatalogCommand::List { json } => {
+                    commands::catalog_list::execute(consumer_format(json))
                 }
-            }
-            s if !s.starts_with('-') => keyword = Some(s.to_string()),
-            _ => {}
+                CatalogCommand::Remove { name_or_url } => {
+                    commands::catalog_remove::execute(&name_or_url)
+                }
+                CatalogCommand::Update { name } => commands::catalog_update::execute(&name),
+            };
+            consumer_result(result, &mut io)
         }
+        Command::Search(args) => consumer_result(search(&args, commands::search::execute), &mut io),
+        Command::Show { args, scope } => consumer_result(
+            commands::show::execute(
+                &args.identifier,
+                consumer_format(args.json),
+                scope.as_deref(),
+                args.media_type.as_deref(),
+            ),
+            &mut io,
+        ),
+        Command::Pull { args, scope } => consumer_result(
+            commands::pull::execute(
+                &args.identifier,
+                args.output.as_deref(),
+                scope.as_deref(),
+                args.media_type.as_deref(),
+            ),
+            &mut io,
+        ),
     }
-    let Some(keyword) = keyword else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} search [--regex] [-n <limit>] [--json] <keyword>"
-        )?;
-        return Ok(2);
-    };
-    let fmt = if is_json {
+}
+
+fn oci_command(command: OciCommand, io: &mut Io) -> io::Result<i32> {
+    match command {
+        OciCommand::Pack { path } => oci_pack_command(&path, io),
+        OciCommand::Unpack { path } => oci_unpack_command(&path, io),
+        OciCommand::ExportLayout {
+            publish,
+            layout_dir,
+        } => oci_export_layout_command(&publish, &layout_dir, io),
+        OciCommand::UnpackLayout {
+            layout_dir,
+            ref_name,
+        } => oci_unpack_layout_command(&layout_dir, ref_name.as_deref(), io),
+        OciCommand::Push {
+            publish,
+            target,
+            to_oci_layout_path,
+            plain_http,
+            insecure,
+        } => {
+            let destination = PushDestination {
+                target: &target,
+                to_oci_layout_path: to_oci_layout_path.as_deref(),
+                plain_http,
+                insecure,
+            };
+            oci_push_command(&publish, &destination, io)
+        }
+        OciCommand::Add {
+            name,
+            layout_dir,
+            ref_name,
+        } => consumer_result(
+            commands::oci_add::execute(&name, &layout_dir, ref_name.as_deref()),
+            io,
+        ),
+        OciCommand::Search(args) => {
+            consumer_result(search(&args, commands::oci_search::execute), io)
+        }
+        OciCommand::Show(args) => consumer_result(
+            commands::oci_show::execute(
+                &args.identifier,
+                consumer_format(args.json),
+                args.media_type.as_deref(),
+            ),
+            io,
+        ),
+        OciCommand::Pull(args) => consumer_result(
+            commands::oci_pull::execute(
+                &args.identifier,
+                args.output.as_deref(),
+                args.media_type.as_deref(),
+            ),
+            io,
+        ),
+    }
+}
+
+fn consumer_format(json: bool) -> commands::OutputFormat {
+    if json {
         commands::OutputFormat::Json
     } else {
         commands::OutputFormat::Table
-    };
-    match commands::search::execute(&keyword, use_regex, limit, fmt) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
     }
 }
 
-fn show_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut identifier = None;
-    let mut scope: Option<String> = None;
-    let mut media_type: Option<String> = None;
-    let mut is_json = false;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--json" | "-j" => is_json = true,
-            "--scope" | "-s" => {
-                scope = iter.next().map(|s| s.to_string());
-            }
-            "--media-type" | "-m" => {
-                media_type = iter.next().map(|s| s.to_string());
-            }
-            s if !s.starts_with('-') => identifier = Some(s.to_string()),
-            _ => {}
+fn search(
+    args: &SearchArgs,
+    execute: fn(&str, bool, usize, commands::OutputFormat) -> error::Result<()>,
+) -> error::Result<()> {
+    execute(
+        &args.keyword,
+        args.regex,
+        args.limit,
+        consumer_format(args.json),
+    )
+}
+
+fn consumer_result(result: error::Result<()>, io: &mut Io) -> io::Result<i32> {
+    match result {
+        Ok(()) => Ok(0),
+        Err(error) => {
+            writeln!(io.err, "error: {error}")?;
+            Ok(1)
         }
     }
-    let Some(identifier) = identifier else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} show [--scope <catalog-name-or-url>] [--json] [--media-type <type>] <identifier>"
-        )?;
-        return Ok(2);
-    };
-    let fmt = if is_json {
-        commands::OutputFormat::Json
+}
+
+fn validate_command(path: &str, json: bool, io: &mut Io) -> io::Result<i32> {
+    let output_format = if json {
+        OutputFormat::Json
     } else {
-        commands::OutputFormat::Table
-    };
-    match commands::show::execute(&identifier, fmt, scope.as_deref(), media_type.as_deref()) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
-    }
-}
-
-fn pull_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut identifier = None;
-    let mut output_path: Option<String> = None;
-    let mut scope: Option<String> = None;
-    let mut media_type: Option<String> = None;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--output" | "-o" => {
-                output_path = iter.next().map(|s| s.to_string());
-            }
-            "--scope" | "-s" => {
-                scope = iter.next().map(|s| s.to_string());
-            }
-            "--media-type" | "-m" => {
-                media_type = iter.next().map(|s| s.to_string());
-            }
-            s if !s.starts_with('-') => identifier = Some(s.to_string()),
-            _ => {}
-        }
-    }
-    let Some(identifier) = identifier else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} pull [--output <path>] [--scope <catalog-name-or-url>] [--media-type <type>] <identifier>"
-        )?;
-        return Ok(2);
-    };
-    match commands::pull::execute(
-        &identifier,
-        output_path.as_deref(),
-        scope.as_deref(),
-        media_type.as_deref(),
-    ) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
-    }
-}
-
-fn validate_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some(options) = parse_validate_options(args, stderr)? else {
-        return Ok(2);
+        OutputFormat::Text
     };
 
-    let catalog = match read_catalog(options.path, stdin) {
+    let catalog = match read_catalog(path, io.stdin) {
         Ok(catalog) => catalog,
         Err(error) => {
-            write_parse_error(options.output_format, options.path, error, stdout, stderr)?;
+            write_parse_error(output_format, path, error, &mut io.out, &mut io.err)?;
             return Ok(1);
         }
     };
 
     let result = validate(&catalog);
 
-    match options.output_format {
+    match output_format {
         OutputFormat::Text => {
             if result.is_valid {
-                writeln!(stdout, "catalog is valid")?;
+                writeln!(io.out, "catalog is valid")?;
                 writeln!(
-                    stdout,
+                    io.out,
                     "conformance: {}",
                     conformance_level_name(result.conformance_level)
                 )?;
 
                 if !result.warnings.is_empty() {
-                    write_diagnostics(stdout, "warnings", &result.warnings)?;
+                    write_diagnostics(&mut io.out, "warnings", &result.warnings)?;
                 }
 
                 Ok(0)
             } else {
-                writeln!(stderr, "catalog is invalid")?;
+                writeln!(io.err, "catalog is invalid")?;
                 writeln!(
-                    stderr,
+                    io.err,
                     "conformance: {}",
                     conformance_level_name(result.conformance_level)
                 )?;
-                write_diagnostics(stderr, "errors", &result.errors)?;
+                write_diagnostics(&mut io.err, "errors", &result.errors)?;
 
                 if !result.warnings.is_empty() {
-                    write_diagnostics(stderr, "warnings", &result.warnings)?;
+                    write_diagnostics(&mut io.err, "warnings", &result.warnings)?;
                 }
 
                 Ok(1)
@@ -361,7 +263,7 @@ fn validate_command<R: Read, W: Write, E: Write>(
         }
         OutputFormat::Json => {
             write_validation_result_json(
-                stdout,
+                &mut io.out,
                 result.is_valid,
                 Some(result.conformance_level),
                 diagnostics_to_json(&result.errors),
@@ -373,78 +275,26 @@ fn validate_command<R: Read, W: Write, E: Write>(
     }
 }
 
-fn format_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some(path) = expect_single_path("format", args, stderr)? else {
-        return Ok(2);
-    };
-
-    let catalog = match read_catalog(path, stdin) {
+fn format_command(path: &str, io: &mut Io) -> io::Result<i32> {
+    let catalog = match read_catalog(path, io.stdin) {
         Ok(catalog) => catalog,
         Err(error) => {
-            writeln!(stderr, "{}", parse_error_message(path, &error))?;
+            writeln!(io.err, "{}", parse_error_message(path, &error))?;
             return Ok(1);
         }
     };
 
-    write_writer(&mut *stdout, &catalog).map_err(io::Error::other)?;
-    writeln!(stdout)?;
+    write_writer(&mut io.out, &catalog).map_err(io::Error::other)?;
+    writeln!(io.out)?;
 
     Ok(0)
 }
 
-fn oci_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some((subcommand, remaining)) = args.split_first() else {
-        writeln!(stderr, "oci expects a subcommand")?;
-        write_usage(stderr)?;
-        return Ok(2);
-    };
-
-    match subcommand.as_str() {
-        "pack" => oci_pack_command(remaining, stdin, stdout, stderr),
-        "unpack" => oci_unpack_command(remaining, stdin, stdout, stderr),
-        "export-layout" => oci_export_layout_command(remaining, stdin, stdout, stderr),
-        "unpack-layout" => oci_unpack_layout_command(remaining, stdout, stderr),
-        "push" => oci_push_command(remaining, stdin, stdout, stderr),
-        "add" => oci_add_command(remaining, stderr),
-        "search" => oci_search_command(remaining, stderr),
-        "show" => oci_show_command(remaining, stderr),
-        "pull" => oci_pull_command(remaining, stderr),
-        "help" => {
-            write_usage(stdout)?;
-            Ok(0)
-        }
-        other => {
-            writeln!(stderr, "unknown oci subcommand: {other}")?;
-            write_usage(stderr)?;
-            Ok(2)
-        }
-    }
-}
-
-fn oci_pack_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some(path) = expect_single_path("oci pack", args, stderr)? else {
-        return Ok(2);
-    };
-
-    let catalog = match read_catalog(path, stdin) {
+fn oci_pack_command(path: &str, io: &mut Io) -> io::Result<i32> {
+    let catalog = match read_catalog(path, io.stdin) {
         Ok(catalog) => catalog,
         Err(error) => {
-            writeln!(stderr, "{}", parse_error_message(path, &error))?;
+            writeln!(io.err, "{}", parse_error_message(path, &error))?;
             return Ok(1);
         }
     };
@@ -452,31 +302,22 @@ fn oci_pack_command<R: Read, W: Write, E: Write>(
     let artifacts = match pack_catalog(&catalog) {
         Ok(artifacts) => artifacts,
         Err(error) => {
-            writeln!(stderr, "failed to pack '{path}' as OCI artifacts: {error}")?;
+            writeln!(io.err, "failed to pack '{path}' as OCI artifacts: {error}")?;
             return Ok(1);
         }
     };
 
-    serde_json::to_writer_pretty(&mut *stdout, &artifacts).map_err(io::Error::other)?;
-    writeln!(stdout)?;
+    serde_json::to_writer_pretty(&mut io.out, &artifacts).map_err(io::Error::other)?;
+    writeln!(io.out)?;
 
     Ok(0)
 }
 
-fn oci_unpack_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some(path) = expect_single_path("oci unpack", args, stderr)? else {
-        return Ok(2);
-    };
-
-    let bytes = match read_bytes(path, stdin) {
+fn oci_unpack_command(path: &str, io: &mut Io) -> io::Result<i32> {
+    let bytes = match read_bytes(path, io.stdin) {
         Ok(bytes) => bytes,
         Err(error) => {
-            writeln!(stderr, "failed to read {}: {error}", input_label(path))?;
+            writeln!(io.err, "failed to read {}: {error}", input_label(path))?;
             return Ok(1);
         }
     };
@@ -485,7 +326,7 @@ fn oci_unpack_command<R: Read, W: Write, E: Write>(
         Ok(artifacts) => artifacts,
         Err(error) => {
             writeln!(
-                stderr,
+                io.err,
                 "failed to parse OCI artifact set from {}: {error}",
                 input_label(path)
             )?;
@@ -497,7 +338,7 @@ fn oci_unpack_command<R: Read, W: Write, E: Write>(
         Ok(catalog) => catalog,
         Err(error) => {
             writeln!(
-                stderr,
+                io.err,
                 "failed to unpack OCI artifact set from {}: {error}",
                 input_label(path)
             )?;
@@ -505,105 +346,102 @@ fn oci_unpack_command<R: Read, W: Write, E: Write>(
         }
     };
 
-    write_writer(&mut *stdout, &catalog).map_err(io::Error::other)?;
-    writeln!(stdout)?;
+    write_writer(&mut io.out, &catalog).map_err(io::Error::other)?;
+    writeln!(io.out)?;
 
     Ok(0)
 }
 
-fn oci_export_layout_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> io::Result<i32> {
-    let Some(options) = parse_oci_export_layout_options(args, stderr)? else {
-        return Ok(2);
-    };
-
-    let catalog = match read_catalog(options.path, stdin) {
+/// Reads the catalog and packs it, attaching Cosign material when a key is given.
+/// `None` means the error has been reported.
+fn pack(publish: &PublishArgs, io: &mut Io) -> io::Result<Option<OciArtifactSet>> {
+    let catalog = match read_catalog(&publish.path, io.stdin) {
         Ok(catalog) => catalog,
         Err(error) => {
-            writeln!(stderr, "{}", parse_error_message(options.path, &error))?;
-            return Ok(1);
+            writeln!(io.err, "{}", parse_error_message(&publish.path, &error))?;
+            return Ok(None);
         }
     };
 
-    let artifacts = match pack_catalog(&catalog) {
+    let mut artifacts = match pack_catalog(&catalog) {
         Ok(artifacts) => artifacts,
         Err(error) => {
             writeln!(
-                stderr,
+                io.err,
                 "failed to pack '{}' as OCI artifacts: {error}",
-                options.path
+                publish.path
             )?;
-            return Ok(1);
+            return Ok(None);
         }
     };
 
-    let mut artifacts = artifacts;
-
-    if let Some(cosign_key) = options.cosign_key {
+    if let Some(cosign_key) = &publish.cosign_key {
         match attach_cosign_material(
             &catalog,
             &mut artifacts,
             cosign_key,
-            options.cosign_public_key,
+            publish.cosign_public_key.as_deref(),
         ) {
             Ok(attached) => {
                 if attached > 0 {
                     writeln!(
-                        stdout,
+                        io.out,
                         "attached Cosign verification artifacts for {attached} trust manifest(s)"
                     )?;
                 }
             }
             Err(error) => {
                 writeln!(
-                    stderr,
+                    io.err,
                     "failed to attach Cosign verification artifacts: {error}"
                 )?;
-                return Ok(1);
+                return Ok(None);
             }
         }
     }
 
-    match export_layout(&artifacts, options.layout_path, options.tag) {
+    Ok(Some(artifacts))
+}
+
+fn oci_export_layout_command(
+    publish: &PublishArgs,
+    layout_dir: &str,
+    io: &mut Io,
+) -> io::Result<i32> {
+    let Some(artifacts) = pack(publish, io)? else {
+        return Ok(1);
+    };
+
+    match export_layout(&artifacts, layout_dir, &publish.tag) {
         Ok(()) => {
             writeln!(
-                stdout,
-                "exported OCI image layout to '{}' with tag '{}'",
-                options.layout_path, options.tag
+                io.out,
+                "exported OCI image layout to '{layout_dir}' with tag '{}'",
+                publish.tag
             )?;
             Ok(0)
         }
         Err(error) => {
             writeln!(
-                stderr,
-                "failed to export OCI layout to '{}': {error}",
-                options.layout_path
+                io.err,
+                "failed to export OCI layout to '{layout_dir}': {error}"
             )?;
             Ok(1)
         }
     }
 }
 
-fn oci_unpack_layout_command<W: Write, E: Write>(
-    args: &[String],
-    stdout: &mut W,
-    stderr: &mut E,
+fn oci_unpack_layout_command(
+    layout_dir: &str,
+    ref_name: Option<&str>,
+    io: &mut Io,
 ) -> io::Result<i32> {
-    let Some(options) = parse_oci_unpack_layout_options(args, stderr)? else {
-        return Ok(2);
-    };
-
-    let artifacts = match import_layout(options.layout_path, options.ref_name) {
+    let artifacts = match import_layout(layout_dir, ref_name) {
         Ok(artifacts) => artifacts,
         Err(error) => {
             writeln!(
-                stderr,
-                "failed to import OCI layout from '{}': {error}",
-                options.layout_path
+                io.err,
+                "failed to import OCI layout from '{layout_dir}': {error}"
             )?;
             return Ok(1);
         }
@@ -613,278 +451,104 @@ fn oci_unpack_layout_command<W: Write, E: Write>(
         Ok(catalog) => catalog,
         Err(error) => {
             writeln!(
-                stderr,
-                "failed to unpack OCI layout from '{}': {error}",
-                options.layout_path
+                io.err,
+                "failed to unpack OCI layout from '{layout_dir}': {error}"
             )?;
             return Ok(1);
         }
     };
 
-    write_writer(&mut *stdout, &catalog).map_err(io::Error::other)?;
-    writeln!(stdout)?;
+    write_writer(&mut io.out, &catalog).map_err(io::Error::other)?;
+    writeln!(io.out)?;
 
     Ok(0)
 }
 
-fn oci_add_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut name = None;
-    let mut layout_path = None;
-    let mut ref_name: Option<String> = None;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--ref-name" | "-r" => {
-                ref_name = iter.next().map(|s| s.to_string());
-            }
-            s if !s.starts_with('-') => {
-                if name.is_none() {
-                    name = Some(s.to_string());
-                } else {
-                    layout_path = Some(s.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    let (Some(name), Some(layout_path)) = (name, layout_path) else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} oci add <name> <layout-dir> [--ref-name <tag>]"
-        )?;
-        return Ok(2);
-    };
-    match commands::oci_add::execute(&name, &layout_path, ref_name.as_deref()) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
-    }
+/// Where `oci push` sends the artifacts, and how.
+struct PushDestination<'a> {
+    target: &'a str,
+    to_oci_layout_path: Option<&'a str>,
+    plain_http: bool,
+    insecure: bool,
 }
 
-fn oci_search_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut keyword = None;
-    let mut use_regex = false;
-    let mut limit = 50usize;
-    let mut is_json = false;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--regex" | "-r" => use_regex = true,
-            "--json" | "-j" => is_json = true,
-            "-n" | "--limit" => {
-                if let Some(v) = iter.next() {
-                    limit = v.parse().unwrap_or(limit);
-                }
-            }
-            s if !s.starts_with('-') => keyword = Some(s.to_string()),
-            _ => {}
-        }
-    }
-    let Some(keyword) = keyword else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} oci search [--regex] [-n <limit>] [--json] <keyword>"
-        )?;
-        return Ok(2);
-    };
-    let fmt = if is_json {
-        commands::OutputFormat::Json
-    } else {
-        commands::OutputFormat::Table
-    };
-    match commands::oci_search::execute(&keyword, use_regex, limit, fmt) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
-    }
-}
-
-fn oci_show_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut identifier = None;
-    let mut is_json = false;
-    let mut media_type: Option<String> = None;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--json" | "-j" => is_json = true,
-            "--media-type" | "-m" => {
-                media_type = iter.next().map(|s| s.to_string());
-            }
-            s if !s.starts_with('-') => identifier = Some(s.to_string()),
-            _ => {}
-        }
-    }
-    let Some(identifier) = identifier else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} oci show [--json] [--media-type <type>] <identifier>"
-        )?;
-        return Ok(2);
-    };
-    let fmt = if is_json {
-        commands::OutputFormat::Json
-    } else {
-        commands::OutputFormat::Table
-    };
-    match commands::oci_show::execute(&identifier, fmt, media_type.as_deref()) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
-    }
-}
-
-fn oci_pull_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
-    let mut identifier = None;
-    let mut output_path: Option<String> = None;
-    let mut media_type: Option<String> = None;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--output" | "-o" => {
-                output_path = iter.next().map(|s| s.to_string());
-            }
-            "--media-type" | "-m" => {
-                media_type = iter.next().map(|s| s.to_string());
-            }
-            s if !s.starts_with('-') => identifier = Some(s.to_string()),
-            _ => {}
-        }
-    }
-    let Some(identifier) = identifier else {
-        writeln!(
-            stderr,
-            "usage: {BIN_NAME} oci pull [--output <path>] [--media-type <type>] <identifier>"
-        )?;
-        return Ok(2);
-    };
-    match commands::oci_pull::execute(&identifier, output_path.as_deref(), media_type.as_deref()) {
-        Ok(()) => Ok(0),
-        Err(e) => consumer_error_to_io(e, stderr),
-    }
-}
-
-fn oci_push_command<R: Read, W: Write, E: Write>(
-    args: &[String],
-    stdin: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
+fn oci_push_command(
+    publish: &PublishArgs,
+    destination: &PushDestination,
+    io: &mut Io,
 ) -> io::Result<i32> {
-    let Some(options) = parse_oci_push_options(args, stderr)? else {
-        return Ok(2);
+    let Some(artifacts) = pack(publish, io)? else {
+        return Ok(1);
     };
-
-    let catalog = match read_catalog(options.path, stdin) {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            writeln!(stderr, "{}", parse_error_message(options.path, &error))?;
-            return Ok(1);
-        }
-    };
-
-    let artifacts = match pack_catalog(&catalog) {
-        Ok(artifacts) => artifacts,
-        Err(error) => {
-            writeln!(
-                stderr,
-                "failed to pack '{}' as OCI artifacts: {error}",
-                options.path
-            )?;
-            return Ok(1);
-        }
-    };
-
-    let mut artifacts = artifacts;
-
-    if let Some(cosign_key) = options.cosign_key {
-        match attach_cosign_material(
-            &catalog,
-            &mut artifacts,
-            cosign_key,
-            options.cosign_public_key,
-        ) {
-            Ok(attached) => {
-                if attached > 0 {
-                    writeln!(
-                        stdout,
-                        "attached Cosign verification artifacts for {attached} trust manifest(s)"
-                    )?;
-                }
-            }
-            Err(error) => {
-                writeln!(
-                    stderr,
-                    "failed to attach Cosign verification artifacts: {error}"
-                )?;
-                return Ok(1);
-            }
-        }
-    }
 
     let layout_dir = temporary_layout_dir("ai-catalog-oras-layout");
-    let result = push_artifacts_via_oras(&artifacts, &layout_dir, options, stdout, stderr);
+    let result = push_artifacts_via_oras(&artifacts, &layout_dir, &publish.tag, destination, io);
     let _ = fs::remove_dir_all(&layout_dir);
 
     result
 }
 
-fn push_artifacts_via_oras<W: Write, E: Write>(
+fn push_artifacts_via_oras(
     artifacts: &ai_catalog_oci::OciArtifactSet,
     layout_dir: &Path,
-    options: OciPushOptions<'_>,
-    stdout: &mut W,
-    stderr: &mut E,
+    tag: &str,
+    destination: &PushDestination,
+    io: &mut Io,
 ) -> io::Result<i32> {
-    if let Err(error) = export_layout(artifacts, layout_dir, options.tag) {
+    if let Err(error) = export_layout(artifacts, layout_dir, tag) {
         writeln!(
-            stderr,
+            io.err,
             "failed to export temporary OCI layout for '{}': {error}",
-            options.target
+            destination.target
         )?;
         return Ok(1);
     }
 
     let args = build_oras_cp_args(
         layout_dir,
-        options.tag,
-        options.target,
-        options.to_oci_layout_path,
-        options.plain_http,
-        options.insecure,
+        tag,
+        destination.target,
+        destination.to_oci_layout_path,
+        destination.plain_http,
+        destination.insecure,
     );
     let output = match execute_oras(&args) {
         Ok(output) => output,
         Err(error) => {
-            writeln!(stderr, "failed to invoke oras: {error}")?;
+            writeln!(io.err, "failed to invoke oras: {error}")?;
             return Ok(1);
         }
     };
 
-    write_process_output(stdout, &output.stdout)?;
-    write_process_output(stderr, &output.stderr)?;
+    write_process_output(&mut io.out, &output.stdout)?;
+    write_process_output(&mut io.err, &output.stderr)?;
 
     if output.status.success() {
-        let repository = target_repository(options.target);
+        let repository = target_repository(destination.target);
 
         for digest in artifacts.referrers.keys() {
             let referrer_args = build_oras_cp_referrer_args(
                 layout_dir,
                 digest,
                 repository,
-                options.to_oci_layout_path,
-                options.plain_http,
-                options.insecure,
+                destination.to_oci_layout_path,
+                destination.plain_http,
+                destination.insecure,
             );
             let referrer_output = match execute_oras(&referrer_args) {
                 Ok(output) => output,
                 Err(error) => {
-                    writeln!(stderr, "failed to invoke oras: {error}")?;
+                    writeln!(io.err, "failed to invoke oras: {error}")?;
                     return Ok(1);
                 }
             };
 
-            write_process_output(stdout, &referrer_output.stdout)?;
-            write_process_output(stderr, &referrer_output.stderr)?;
+            write_process_output(&mut io.out, &referrer_output.stdout)?;
+            write_process_output(&mut io.err, &referrer_output.stderr)?;
 
             if !referrer_output.status.success() {
                 if referrer_output.stdout.is_empty() && referrer_output.stderr.is_empty() {
-                    writeln!(stderr, "oras exited with status {}", referrer_output.status)?;
+                    writeln!(io.err, "oras exited with status {}", referrer_output.status)?;
                 }
 
                 return Ok(referrer_output.status.code().unwrap_or(1));
@@ -894,22 +558,22 @@ fn push_artifacts_via_oras<W: Write, E: Write>(
         Ok(0)
     } else {
         if output.stdout.is_empty() && output.stderr.is_empty() {
-            writeln!(stderr, "oras exited with status {}", output.status)?;
+            writeln!(io.err, "oras exited with status {}", output.status)?;
         }
 
         Ok(output.status.code().unwrap_or(1))
     }
 }
 
-fn read_catalog<R: Read>(path: &str, stdin: &mut R) -> ai_catalog::Result<ai_catalog::AiCatalog> {
+fn read_catalog(path: &str, stdin: &mut dyn Read) -> ai_catalog::Result<ai_catalog::AiCatalog> {
     if path == "-" {
-        parse_reader(&mut *stdin)
+        parse_reader(stdin)
     } else {
         parse_file(path)
     }
 }
 
-fn read_bytes<R: Read>(path: &str, stdin: &mut R) -> io::Result<Vec<u8>> {
+fn read_bytes(path: &str, stdin: &mut dyn Read) -> io::Result<Vec<u8>> {
     if path == "-" {
         let mut bytes = Vec::new();
         stdin.read_to_end(&mut bytes)?;
@@ -917,376 +581,6 @@ fn read_bytes<R: Read>(path: &str, stdin: &mut R) -> io::Result<Vec<u8>> {
     } else {
         fs::read(path)
     }
-}
-
-fn parse_validate_options<'a>(
-    args: &'a [String],
-    stderr: &mut impl Write,
-) -> io::Result<Option<ValidateOptions<'a>>> {
-    let mut output_format = OutputFormat::Text;
-    let mut path = None;
-
-    for arg in args {
-        match arg.as_str() {
-            "--json" => output_format = OutputFormat::Json,
-            "-" => {
-                if path.replace(arg.as_str()).is_some() {
-                    writeln!(stderr, "validate expects exactly one <path> argument")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                }
-            }
-            value if value.starts_with('-') => {
-                writeln!(stderr, "unknown validate option: {value}")?;
-                write_usage(stderr)?;
-                return Ok(None);
-            }
-            value => {
-                if path.replace(value).is_some() {
-                    writeln!(stderr, "validate expects exactly one <path> argument")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                }
-            }
-        }
-    }
-
-    if let Some(path) = path {
-        Ok(Some(ValidateOptions {
-            output_format,
-            path,
-        }))
-    } else {
-        writeln!(stderr, "validate expects exactly one <path> argument")?;
-        write_usage(stderr)?;
-        Ok(None)
-    }
-}
-
-fn parse_oci_export_layout_options<'a>(
-    args: &'a [String],
-    stderr: &mut impl Write,
-) -> io::Result<Option<OciExportLayoutOptions<'a>>> {
-    let mut tag = DEFAULT_OCI_LAYOUT_TAG;
-    let mut cosign_key = None;
-    let mut cosign_public_key = None;
-    let mut positional = Vec::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--tag" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(stderr, "oci export-layout requires a value for --tag")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                tag = value;
-            }
-            "--cosign-key" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(
-                        stderr,
-                        "oci export-layout requires a value for --cosign-key"
-                    )?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                cosign_key = Some(value.as_str());
-            }
-            "--cosign-public-key" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(
-                        stderr,
-                        "oci export-layout requires a value for --cosign-public-key"
-                    )?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                cosign_public_key = Some(value.as_str());
-            }
-            "-" => positional.push("-"),
-            value if value.starts_with('-') => {
-                writeln!(stderr, "unknown oci export-layout option: {value}")?;
-                write_usage(stderr)?;
-                return Ok(None);
-            }
-            value => positional.push(value),
-        }
-
-        index += 1;
-    }
-
-    if cosign_public_key.is_some() && cosign_key.is_none() {
-        writeln!(
-            stderr,
-            "oci export-layout requires --cosign-key when --cosign-public-key is set"
-        )?;
-        write_usage(stderr)?;
-        return Ok(None);
-    }
-
-    if positional.len() != 2 {
-        writeln!(
-            stderr,
-            "oci export-layout expects exactly one <path|-> and one <layout-dir> argument"
-        )?;
-        write_usage(stderr)?;
-        return Ok(None);
-    }
-
-    Ok(Some(OciExportLayoutOptions {
-        path: positional[0],
-        layout_path: positional[1],
-        tag,
-        cosign_key,
-        cosign_public_key,
-    }))
-}
-
-fn parse_oci_push_options<'a>(
-    args: &'a [String],
-    stderr: &mut impl Write,
-) -> io::Result<Option<OciPushOptions<'a>>> {
-    let mut tag = DEFAULT_OCI_LAYOUT_TAG;
-    let mut to_oci_layout_path = None;
-    let mut plain_http = false;
-    let mut insecure = false;
-    let mut cosign_key = None;
-    let mut cosign_public_key = None;
-    let mut positional = Vec::new();
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--tag" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(stderr, "oci push requires a value for --tag")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                tag = value;
-            }
-            "--cosign-key" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(stderr, "oci push requires a value for --cosign-key")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                cosign_key = Some(value.as_str());
-            }
-            "--cosign-public-key" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(stderr, "oci push requires a value for --cosign-public-key")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                cosign_public_key = Some(value.as_str());
-            }
-            "--to-oci-layout-path" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(stderr, "oci push requires a value for --to-oci-layout-path")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                to_oci_layout_path = Some(value.as_str());
-            }
-            "--plain-http" => plain_http = true,
-            "--insecure" => insecure = true,
-            "-" => positional.push("-"),
-            value if value.starts_with('-') => {
-                writeln!(stderr, "unknown oci push option: {value}")?;
-                write_usage(stderr)?;
-                return Ok(None);
-            }
-            value => positional.push(value),
-        }
-
-        index += 1;
-    }
-
-    if cosign_public_key.is_some() && cosign_key.is_none() {
-        writeln!(
-            stderr,
-            "oci push requires --cosign-key when --cosign-public-key is set"
-        )?;
-        write_usage(stderr)?;
-        return Ok(None);
-    }
-
-    if positional.len() != 2 {
-        writeln!(
-            stderr,
-            "oci push expects exactly one <path|-> and one <target> argument"
-        )?;
-        write_usage(stderr)?;
-        return Ok(None);
-    }
-
-    Ok(Some(OciPushOptions {
-        path: positional[0],
-        target: positional[1],
-        tag,
-        to_oci_layout_path,
-        plain_http,
-        insecure,
-        cosign_key,
-        cosign_public_key,
-    }))
-}
-
-fn parse_oci_unpack_layout_options<'a>(
-    args: &'a [String],
-    stderr: &mut impl Write,
-) -> io::Result<Option<OciUnpackLayoutOptions<'a>>> {
-    let mut ref_name = None;
-    let mut layout_path = None;
-    let mut index = 0;
-
-    while index < args.len() {
-        match args[index].as_str() {
-            "--ref-name" => {
-                index += 1;
-
-                let Some(value) = args.get(index) else {
-                    writeln!(stderr, "oci unpack-layout requires a value for --ref-name")?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                };
-
-                ref_name = Some(value.as_str());
-            }
-            value if value.starts_with('-') => {
-                writeln!(stderr, "unknown oci unpack-layout option: {value}")?;
-                write_usage(stderr)?;
-                return Ok(None);
-            }
-            value => {
-                if layout_path.replace(value).is_some() {
-                    writeln!(
-                        stderr,
-                        "oci unpack-layout expects exactly one <layout-dir> argument"
-                    )?;
-                    write_usage(stderr)?;
-                    return Ok(None);
-                }
-            }
-        }
-
-        index += 1;
-    }
-
-    if let Some(layout_path) = layout_path {
-        Ok(Some(OciUnpackLayoutOptions {
-            layout_path,
-            ref_name,
-        }))
-    } else {
-        writeln!(
-            stderr,
-            "oci unpack-layout expects exactly one <layout-dir> argument"
-        )?;
-        write_usage(stderr)?;
-        Ok(None)
-    }
-}
-
-fn expect_single_path<'a>(
-    command: &str,
-    args: &'a [String],
-    stderr: &mut impl Write,
-) -> io::Result<Option<&'a str>> {
-    if args.len() == 1 {
-        return Ok(Some(args[0].as_str()));
-    }
-
-    writeln!(stderr, "{command} expects exactly one <path> argument")?;
-    write_usage(stderr)?;
-    Ok(None)
-}
-
-fn print_help(stdout: &mut impl Write) -> io::Result<()> {
-    writeln!(stdout, "{BIN_NAME}")?;
-    writeln!(stdout)?;
-    write_usage(stdout)
-}
-
-fn write_usage(writer: &mut impl Write) -> io::Result<()> {
-    writeln!(writer, "Usage:")?;
-    writeln!(writer, "  {BIN_NAME} validate [--json] <path|->")?;
-    writeln!(writer, "  {BIN_NAME} format <path|->")?;
-    writeln!(writer, "  {BIN_NAME} oci pack <path|->")?;
-    writeln!(writer, "  {BIN_NAME} oci unpack <path|->")?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <layout-dir>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci unpack-layout [--ref-name <name>] <layout-dir>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <target>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci add <name> <layout-dir> [--ref-name <tag>]"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci search [--regex] [-n <limit>] [--json] <keyword>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci show [--json] [--media-type <type>] <identifier>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} oci pull [--output <path>] [--media-type <type>] <identifier>"
-    )?;
-    writeln!(writer, "  {BIN_NAME} catalog add <name> <url>")?;
-    writeln!(writer, "  {BIN_NAME} catalog list [--json]")?;
-    writeln!(writer, "  {BIN_NAME} catalog remove <name-or-url>")?;
-    writeln!(writer, "  {BIN_NAME} catalog update <name>")?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} search [--regex] [-n <limit>] [--json] <keyword>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} show [--scope <catalog-name-or-url>] [--json] [--media-type <type>] <identifier>"
-    )?;
-    writeln!(
-        writer,
-        "  {BIN_NAME} pull [--output <path>] [--scope <catalog-name-or-url>] [--media-type <type>] <identifier>"
-    )?;
-    writeln!(writer, "  {BIN_NAME} help")?;
-    writeln!(writer, "  {BIN_NAME} version")?;
-    writeln!(writer)?;
-    writeln!(writer, "Use '-' as <path> to read from stdin.")?;
-    Ok(())
 }
 
 fn build_oras_cp_args(
@@ -1370,7 +664,7 @@ fn target_repository(target: &str) -> &str {
 fn execute_oras(args: &[String]) -> io::Result<std::process::Output> {
     let oras_bin = std::env::var(ORAS_BIN_ENV).unwrap_or_else(|_| "oras".to_owned());
 
-    Command::new(oras_bin).args(args).output()
+    std::process::Command::new(oras_bin).args(args).output()
 }
 
 fn attach_cosign_material(
@@ -1494,7 +788,7 @@ fn build_cosign_public_key_args(cosign_key: &str) -> Vec<String> {
 fn execute_cosign(args: &[String]) -> io::Result<std::process::Output> {
     let cosign_bin = std::env::var(COSIGN_BIN_ENV).unwrap_or_else(|_| "cosign".to_owned());
 
-    Command::new(cosign_bin).args(args).output()
+    std::process::Command::new(cosign_bin).args(args).output()
 }
 
 fn command_failure(command: &str, output: &std::process::Output) -> io::Error {
@@ -1658,21 +952,21 @@ mod tests {
 
     #[test]
     fn prints_help_without_arguments() {
-        let (exit_code, stdout, stderr) = run_command(["ai-catalog-cli"], "");
+        let (exit_code, stdout, stderr) = run_command(["ai-catalog"], "");
 
         assert_eq!(exit_code, 0);
         assert!(stdout.contains("Usage:"));
-        assert!(stdout.contains("validate [--json] <path|->"));
-        assert!(stdout.contains("oci pack <path|->"));
-        assert!(stdout.contains("oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <layout-dir>"));
-        assert!(stdout.contains("oci unpack-layout [--ref-name <name>] <layout-dir>"));
-        assert!(stdout.contains("oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <target>"));
+        for command in [
+            "validate", "format", "oci", "catalog", "search", "show", "pull",
+        ] {
+            assert!(stdout.contains(command), "help should list {command}");
+        }
         assert!(stderr.is_empty());
     }
 
     #[test]
     fn prints_version() {
-        let (exit_code, stdout, stderr) = run_command(["ai-catalog", "version"], "");
+        let (exit_code, stdout, stderr) = run_command(["ai-catalog", "--version"], "");
 
         assert_eq!(exit_code, 0);
         assert_eq!(
@@ -1851,31 +1145,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_validate_option() {
-        let (exit_code, stdout, stderr) =
-            run_command(["ai-catalog-cli", "validate", "--yaml", "-"], "");
+    fn rejects_invalid_usage() {
+        for args in [
+            vec!["ai-catalog", "validate", "--yaml", "-"],
+            vec!["ai-catalog", "format"],
+            vec!["ai-catalog", "bogus"],
+        ] {
+            let (exit_code, stdout, stderr) = run_command(args.clone(), "");
 
-        assert_eq!(exit_code, 2);
-        assert!(stdout.is_empty());
-        assert!(stderr.contains("unknown validate option: --yaml"));
-    }
-
-    #[test]
-    fn rejects_missing_format_path() {
-        let (exit_code, stdout, stderr) = run_command(["ai-catalog-cli", "format"], "");
-
-        assert_eq!(exit_code, 2);
-        assert!(stdout.is_empty());
-        assert!(stderr.contains("format expects exactly one <path> argument"));
-    }
-
-    #[test]
-    fn rejects_unknown_command() {
-        let (exit_code, stdout, stderr) = run_command(["ai-catalog-cli", "bogus"], "");
-
-        assert_eq!(exit_code, 2);
-        assert!(stdout.is_empty());
-        assert!(stderr.contains("unknown command: bogus"));
+            assert_eq!(exit_code, 2, "{args:?}");
+            assert!(stdout.is_empty(), "{args:?}");
+            assert!(stderr.contains("Usage:"), "{args:?}");
+        }
     }
 
     #[test]
@@ -1954,7 +1235,7 @@ mod tests {
 
         assert_eq!(exit_code, 2);
         assert!(stdout.is_empty());
-        assert!(stderr.contains("requires --cosign-key when --cosign-public-key is set"));
+        assert!(stderr.contains("--cosign-key"));
     }
 
     #[test]
@@ -2176,7 +1457,10 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{unique}"))
     }
 
-    fn run_command<const N: usize>(args: [&str; N], stdin_text: &str) -> (i32, String, String) {
+    fn run_command<'a>(
+        args: impl IntoIterator<Item = &'a str>,
+        stdin_text: &str,
+    ) -> (i32, String, String) {
         let mut stdin = stdin_text.as_bytes();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
