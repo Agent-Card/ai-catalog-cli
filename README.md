@@ -255,8 +255,8 @@ children and shows the single child of that type. Omitting it, or passing
 
 Downloads an entry's content to disk. For nested-catalog entries the full
 catalog JSON is written; for other types the raw bytes from `entry.url` are
-fetched. Falls back to fetching by URL if the identifier is not in the local
-registry.
+fetched. An `http(s)` URL given as the identifier is fetched as a catalog if it
+is not registered.
 
 ```sh
 ai-catalog pull urn:example:data:dataset-v1
@@ -466,7 +466,7 @@ Entries added via `catalog add` are stored under their source URL and use the
 `urn:ai-catalog:oci:` prefix and are scoped separately. The plain `search`,
 `show`, and `pull` commands span all sources; the `oci search / show / pull`
 variants are restricted to OCI-sourced entries. See
-[`docs/storage.md`](docs/storage.md) for a detailed comparison.
+[`docs/storage.md`](docs/storage.md) for details.
 
 ---
 
