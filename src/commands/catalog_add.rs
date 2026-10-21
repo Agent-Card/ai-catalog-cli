@@ -8,17 +8,14 @@ use ai_catalog::CatalogEntry;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::fetch::{build_client, local_path_to_file_url};
-use crate::resolver::{
-    cli_extension, make_entry_extensions, registry_identifier, resolve_and_cache,
-};
+use crate::fetch::local_path_to_file_url;
+use crate::resolver::{Resolver, cli_extension, make_entry_extensions, registry_identifier};
 
-pub async fn execute(name: &str, url: &str) -> Result<()> {
+pub fn execute(name: &str, url: &str) -> Result<()> {
     let url = local_path_to_file_url(url)?;
     let url = url.as_str();
     let cache = CacheManager::new()?;
     cache.ensure_dirs()?;
-    let client = build_client()?;
     {
         let registry = cache.read_registry()?;
         for entry in &registry.entries {
@@ -46,13 +43,10 @@ pub async fn execute(name: &str, url: &str) -> Result<()> {
         }
     }
     println!("Fetching catalog from {}...", url.cyan());
-    let entries = resolve_and_cache(url, &client, &cache).await?;
-    let url_to_hash = cache.read_refs()?;
-    let root_hash = url_to_hash
-        .get(url)
-        .ok_or_else(|| Error::Other(format!("root catalog hash not found after fetch: {url}")))?
-        .clone();
-    let entry_count = entries.len();
+    let mut resolver = Resolver::online(&cache)?;
+    let root_hash = resolver.fetch(url)?;
+    let entry_count = resolver.leaves().count();
+    resolver.into_found();
     let file_url = cache.object_file_url(&root_hash);
     let identifier = registry_identifier("local", name);
     let extensions = make_entry_extensions(url, &root_hash, entry_count);

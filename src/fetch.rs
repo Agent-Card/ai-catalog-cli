@@ -2,50 +2,101 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
-use reqwest::Client;
-use std::path::Path;
+use std::io::Read;
+use std::path::PathBuf;
+use std::time::Duration;
 
-use ai_catalog::AiCatalog;
+use reqwest::blocking::Client;
+use reqwest::redirect::Policy;
+use url::Url;
 
 use crate::error::{Error, Result};
 
-/// If `url` has no scheme (i.e. is a bare path), resolve it to an absolute
-/// `file://` URI so callers always work with a stable, scheme-bearing string.
-pub fn local_path_to_file_url(url: &str) -> Result<String> {
-    if url.contains("://") {
-        return Ok(url.to_string());
-    }
-    let abs = std::fs::canonicalize(url)
-        .map_err(|e| Error::Other(format!("cannot resolve path \"{url}\": {e}")))?;
-    Ok(format!("file://{}", abs.display()))
-}
+/// Largest catalog document the CLI will read.
+const MAX_CATALOG_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_REDIRECTS: usize = 10;
 
 pub fn build_client() -> Result<Client> {
-    Client::builder()
+    Ok(Client::builder()
         .user_agent(format!("ai-catalog/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(Error::Http)
+        .timeout(Duration::from_secs(30))
+        .redirect(Policy::custom(|attempt| {
+            if attempt.url().scheme() != "https" {
+                attempt.error("refusing to follow a redirect to a non-https URL")
+            } else if attempt.previous().len() >= MAX_REDIRECTS {
+                attempt.error("too many redirects")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()?)
 }
 
-pub async fn fetch_bytes(url: &str, client: &Client) -> Result<Vec<u8>> {
-    if let Some(path) = url.strip_prefix("file://") {
-        return Ok(tokio::fs::read(Path::new(path)).await?);
+pub fn is_file_url(url: &str) -> bool {
+    url.starts_with("file://")
+}
+
+fn file_path(url: &str) -> Result<PathBuf> {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.to_file_path().ok())
+        .ok_or_else(|| Error::Other(format!("invalid file URL: {url}")))
+}
+
+/// Turn a bare local path into an absolute `file://` URL; anything with a scheme is returned as is.
+pub fn local_path_to_file_url(path: &str) -> Result<String> {
+    if path.contains("://") {
+        return Ok(path.to_string());
     }
-    let bytes = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    Ok(bytes.to_vec())
+    let abs = std::fs::canonicalize(path)
+        .map_err(|e| Error::Other(format!("cannot resolve path \"{path}\": {e}")))?;
+    Url::from_file_path(&abs)
+        .map(String::from)
+        .map_err(|()| Error::Other(format!("cannot convert \"{path}\" to a URL")))
 }
 
-pub async fn fetch_catalog(url: &str, client: &Client) -> Result<(AiCatalog, Vec<u8>)> {
-    let bytes = fetch_bytes(url, client).await?;
-    let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
-    Ok((catalog, bytes))
+/// Resolve `reference` against the URL of the catalog that contains it.
+pub fn join(base: &str, reference: &str) -> Result<String> {
+    if Url::parse(reference).is_ok() {
+        return Ok(reference.to_string());
+    }
+    Url::parse(base)
+        .and_then(|b| b.join(reference))
+        .map(String::from)
+        .map_err(|e| {
+            Error::Other(format!(
+                "cannot resolve \"{reference}\" against \"{base}\": {e}"
+            ))
+        })
+}
+
+/// Fetch a catalog document, refusing anything over the size limit.
+pub fn fetch_catalog(url: &str, client: &Client) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open(url, client)?
+        .take(MAX_CATALOG_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CATALOG_BYTES {
+        return Err(Error::Other(format!(
+            "{url} is larger than {} MiB",
+            MAX_CATALOG_BYTES / 1024 / 1024
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Fetch an artifact, which may legitimately be large.
+pub fn fetch_artifact(url: &str, client: &Client) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open(url, client)?.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn open(url: &str, client: &Client) -> Result<Box<dyn Read>> {
+    if is_file_url(url) {
+        return Ok(Box::new(std::fs::File::open(file_path(url)?)?));
+    }
+    Ok(Box::new(client.get(url).send()?.error_for_status()?))
 }
 
 #[cfg(test)]
@@ -53,57 +104,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_client_succeeds() {
-        build_client().unwrap();
+    fn join_resolves_relative_references() {
+        assert_eq!(
+            join("https://example.com/a/catalog.json", "b/c.json").unwrap(),
+            "https://example.com/a/b/c.json"
+        );
+        assert_eq!(
+            join("file:///tmp/a/catalog.json", "../b.json").unwrap(),
+            "file:///tmp/b.json"
+        );
+        assert_eq!(
+            join("https://example.com/a.json", "https://other.example/b.json").unwrap(),
+            "https://other.example/b.json"
+        );
     }
 
-    #[tokio::test]
-    async fn fetch_bytes_reads_local_file() {
+    #[test]
+    fn fetch_catalog_rejects_oversized_files() {
         let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("test.txt");
-        std::fs::write(&path, b"hello world").unwrap();
-        let url = format!("file://{}", path.display());
-        let client = build_client().unwrap();
-        let bytes = fetch_bytes(&url, &client).await.unwrap();
-        assert_eq!(bytes, b"hello world");
-    }
-
-    #[tokio::test]
-    async fn fetch_catalog_parses_valid_json() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("catalog.json");
-        let catalog_json = r#"{
-            "specVersion": "1.0",
-            "entries": [
-                {"identifier": "urn:test:entry-1", "type": "application/json", "url": "https://example.com/a.json"}
-            ]
-        }"#;
-        std::fs::write(&path, catalog_json).unwrap();
-        let url = format!("file://{}", path.display());
-        let client = build_client().unwrap();
-        let (catalog, bytes) = fetch_catalog(&url, &client).await.unwrap();
-        assert_eq!(catalog.spec_version, "1.0");
-        assert_eq!(catalog.entries.len(), 1);
-        assert_eq!(catalog.entries[0].identifier, "urn:test:entry-1");
-        assert!(!bytes.is_empty());
-    }
-
-    #[tokio::test]
-    async fn fetch_catalog_fails_on_invalid_json() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("bad.json");
-        std::fs::write(&path, b"not valid json{{{").unwrap();
-        let url = format!("file://{}", path.display());
-        let client = build_client().unwrap();
-        let result = fetch_catalog(&url, &client).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn fetch_bytes_fails_for_missing_file() {
-        let client = build_client().unwrap();
-        let result =
-            fetch_bytes("file:///nonexistent/path/that/does/not/exist.json", &client).await;
-        assert!(result.is_err());
+        let path = dir.path().join("big.json");
+        std::fs::write(&path, vec![b' '; MAX_CATALOG_BYTES as usize + 1]).unwrap();
+        let url = local_path_to_file_url(path.to_str().unwrap()).unwrap();
+        assert!(fetch_catalog(&url, &build_client().unwrap()).is_err());
     }
 }

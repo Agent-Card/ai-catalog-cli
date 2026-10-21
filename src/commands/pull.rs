@@ -2,6 +2,7 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use colored::Colorize;
@@ -10,12 +11,10 @@ use ai_catalog::CatalogEntry;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::fetch::build_client;
-use crate::resolver::{
-    catalog_leaf_entries_for_entry, find_entry_by_id_in_registry, resolve_and_cache,
-};
+use crate::fetch::{build_client, fetch_artifact, join};
+use crate::resolver::{ResolvedEntry, Resolver, allowed};
 
-use super::{CATALOG_MIME_TYPE, find_entry_in_scope};
+use super::{CATALOG_MIME_TYPE, find_entry_in_registry, find_entry_in_scope, leaf_entries_of};
 
 /// Pull a catalog entry by identifier and write its content to disk.
 ///
@@ -24,24 +23,23 @@ use super::{CATALOG_MIME_TYPE, find_entry_in_scope};
 ///   - None → error
 ///   - "application/ai-catalog+json" → write the catalog JSON itself
 ///   - other → find the single child entry of that type and write it
-pub async fn execute(
+pub fn execute(
     identifier: &str,
     output_path: Option<&str>,
     scope: Option<&str>,
     media_type: Option<&str>,
 ) -> Result<()> {
     let cache = CacheManager::new()?;
-    let client = build_client()?;
 
-    let entry = if let Some(scope_val) = scope {
-        find_entry_in_scope(identifier, scope_val, &cache, &client).await?
+    let found = if let Some(scope_val) = scope {
+        find_entry_in_scope(identifier, scope_val, &cache)?
     } else {
         // First search the local registry without hitting the network.
-        let found = find_entry_by_id_in_registry(identifier, &cache)?;
+        let found = find_entry_in_registry(identifier, &cache, None)?;
         if found.is_none() {
             // The identifier might itself be a URL – try fetching it as a catalog.
             if identifier.starts_with("http://") || identifier.starts_with("https://") {
-                return pull_from_url(identifier, output_path, &cache, &client).await;
+                return pull_from_url(identifier, output_path, &cache);
             }
             return Err(Error::EntryNotFound(format!(
                 "{identifier} — run `ai-catalog search {identifier}` or `ai-catalog catalog add <name> <url>` first"
@@ -50,21 +48,21 @@ pub async fn execute(
         found
     };
 
-    let entry = entry.ok_or_else(|| Error::EntryNotFound(identifier.to_string()))?;
+    let found = found.ok_or_else(|| Error::EntryNotFound(identifier.to_string()))?;
 
-    dispatch_pull(&entry, output_path, media_type, &cache).await
+    dispatch_pull(&found, output_path, media_type, &cache)
 }
 
 /// Core dispatch: handle media_type gating and catalog-vs-leaf branching.
 ///
-/// Also used by `oci_pull` — the client is not needed here since all data
-/// sources are either local cache or fetched inline by `write_data_entry`.
-pub(crate) async fn dispatch_pull(
-    entry: &CatalogEntry,
+/// Also used by `oci_pull`.
+pub(crate) fn dispatch_pull(
+    found: &ResolvedEntry,
     output_path: Option<&str>,
     media_type: Option<&str>,
     cache: &CacheManager,
 ) -> Result<()> {
+    let entry = &found.entry;
     if !entry.is_nested_catalog() {
         // Leaf entry — check media_type guard
         if let Some(mt) = media_type
@@ -75,7 +73,7 @@ pub(crate) async fn dispatch_pull(
                 entry.identifier, entry.entry_type, mt
             )));
         }
-        return write_entry(entry, output_path, cache).await;
+        return write_entry(found, output_path, cache);
     }
 
     // Catalog entry — branch on --media-type
@@ -86,16 +84,16 @@ pub(crate) async fn dispatch_pull(
              or --media-type <type> to pull the single entry of that type within it.",
             entry.identifier
         ))),
-        Some(mt) if mt == CATALOG_MIME_TYPE => write_entry(entry, output_path, cache).await,
+        Some(mt) if mt == CATALOG_MIME_TYPE => write_entry(found, output_path, cache),
         Some(mt) => {
-            let leaves = catalog_leaf_entries_for_entry(entry, cache)?;
+            let leaves = leaf_entries_of(found, cache)?;
             let matches: Vec<&_> = leaves.iter().filter(|e| e.entry.entry_type == mt).collect();
             match matches.len() {
                 0 => Err(Error::EntryNotFound(format!(
                     "no entries of type \"{mt}\" found in catalog \"{}\"",
                     entry.identifier
                 ))),
-                1 => write_entry(&matches[0].entry, output_path, cache).await,
+                1 => write_entry(matches[0], output_path, cache),
                 n => Err(Error::Other(format!(
                     "{n} entries of type \"{mt}\" found in catalog \"{}\"; \
                      use --scope to narrow the search",
@@ -106,108 +104,70 @@ pub(crate) async fn dispatch_pull(
     }
 }
 
-async fn pull_from_url(
-    url: &str,
-    output_path: Option<&str>,
-    cache: &CacheManager,
-    client: &reqwest::Client,
-) -> Result<()> {
+fn pull_from_url(url: &str, output_path: Option<&str>, cache: &CacheManager) -> Result<()> {
     println!("Fetching catalog from {}...", url.cyan());
-    cache.ensure_dirs()?;
-    let entries = resolve_and_cache(url, client, cache).await?;
+    let mut resolver = Resolver::online(cache)?;
+    let hash = resolver.fetch(url)?;
+    let entries = resolver.into_found();
     println!(
         "{} fetched {} entries from {}",
         "✓".green(),
-        entries.len(),
+        entries
+            .iter()
+            .filter(|f| !f.entry.is_nested_catalog())
+            .count(),
         url
     );
-    let url_to_hash = cache.read_refs()?;
-    if let Some(hash) = url_to_hash.get(url) {
-        let file_url = cache.object_file_url(hash);
-        let path = file_url.strip_prefix("file://").unwrap_or(&file_url);
-        let bytes = std::fs::read(path)?;
-        if output_path == Some("-") {
-            use std::io::Write;
-            std::io::stdout().write_all(&bytes)?;
-        } else {
-            let dest = resolve_output_path(output_path, url, "json");
-            std::fs::write(&dest, &bytes)?;
-            println!("{} written to {}", "✓".green(), dest.display());
-        }
+    let bytes = cache.read_object(&hash)?;
+    if output_path == Some("-") {
+        std::io::stdout().write_all(&bytes)?;
+    } else {
+        let dest = resolve_output_path(output_path, url, "json");
+        std::fs::write(&dest, &bytes)?;
+        println!("{} written to {}", "✓".green(), dest.display());
     }
     Ok(())
 }
 
-pub(crate) async fn write_entry(
-    entry: &CatalogEntry,
+fn write_entry(
+    found: &ResolvedEntry,
     output_path: Option<&str>,
     cache: &CacheManager,
 ) -> Result<()> {
-    if entry.is_nested_catalog() {
-        write_catalog_entry(entry, output_path, cache).await
-    } else {
-        write_data_entry(entry, output_path).await
-    }
-}
-
-async fn write_catalog_entry(
-    entry: &CatalogEntry,
-    output_path: Option<&str>,
-    _cache: &CacheManager,
-) -> Result<()> {
-    let bytes = if let Some(data) = &entry.data {
-        serde_json::to_vec_pretty(data)?
-    } else {
-        let file_url = entry
-            .url
-            .as_deref()
-            .ok_or_else(|| Error::Other(format!("entry \"{}\" has no URL", entry.identifier)))?;
-        let path = file_url.strip_prefix("file://").unwrap_or(file_url);
-        std::fs::read(path).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                e.kind(),
-                format!("cannot read cached catalog at {file_url}: {e}"),
-            ))
-        })?
-    };
-
-    if output_path == Some("-") {
-        use std::io::Write;
-        std::io::stdout().write_all(&bytes)?;
-        return Ok(());
-    }
-
-    let dest = resolve_output_path(output_path, &entry.identifier, "json");
-    std::fs::write(&dest, &bytes)?;
-    println!(
-        "{} \"{}\" written to {}",
-        "✓".green(),
-        entry.identifier.bold(),
-        dest.display()
-    );
-    Ok(())
-}
-
-async fn write_data_entry(entry: &CatalogEntry, output_path: Option<&str>) -> Result<()> {
-    let bytes = if let Some(data) = &entry.data {
-        serde_json::to_vec_pretty(data)?
-    } else if let Some(url) = &entry.url {
-        let client = build_client()?;
-        crate::fetch::fetch_bytes(url, &client).await?
+    let entry = &found.entry;
+    let (bytes, served) = if let Some(data) = &entry.data {
+        (serde_json::to_vec_pretty(data)?, None)
+    } else if entry.is_nested_catalog() {
+        let bytes = Resolver::offline(cache)?.catalog_bytes(entry, &found.source_catalog_url)?;
+        (bytes.clone(), Some(bytes))
+    } else if let Some(reference) = &entry.url {
+        let url = join(&found.source_catalog_url, reference)?;
+        if !allowed(&found.source_catalog_url, &url) {
+            return Err(Error::Other(format!(
+                "{url} may not be loaded from {}",
+                found.source_catalog_url
+            )));
+        }
+        let bytes = fetch_artifact(&url, &build_client()?)?;
+        (bytes.clone(), Some(bytes))
     } else {
         return Err(Error::Other(format!(
             "entry \"{}\" has neither inline data nor a URL to fetch",
             entry.identifier
         )));
     };
+    let verified = verify_subject_digest(entry, served.as_deref())?;
 
     if output_path == Some("-") {
-        use std::io::Write;
         std::io::stdout().write_all(&bytes)?;
         return Ok(());
     }
 
-    let ext = extension_for_type(&entry.entry_type);
+    let ext = if entry.is_nested_catalog() {
+        "json"
+    } else {
+        extension_for_type(&entry.entry_type)
+    };
     let dest = resolve_output_path(output_path, &entry.identifier, ext);
     std::fs::write(&dest, &bytes)?;
     println!(
@@ -216,7 +176,48 @@ async fn write_data_entry(entry: &CatalogEntry, output_path: Option<&str>) -> Re
         entry.identifier.bold(),
         dest.display()
     );
+    if verified {
+        println!("  digest verified");
+    }
     Ok(())
+}
+
+/// Check the content against `subject.digest` of the entry's trust manifest.
+///
+/// For an artifact behind a `url` the digest covers the bytes as served
+/// (`served`); for inline `data` it covers the JCS form of the value. Returns
+/// whether there was a digest to check. This says nothing about who published
+/// the content: signatures are not verified.
+fn verify_subject_digest(entry: &CatalogEntry, served: Option<&[u8]>) -> Result<bool> {
+    let Some(subject) = entry
+        .trust_manifest
+        .as_ref()
+        .and_then(|manifest| manifest.subject.as_ref())
+    else {
+        return Ok(false);
+    };
+    let canonical;
+    let content = match (&entry.data, served) {
+        (Some(data), _) => {
+            canonical = ai_catalog_trust::canonicalize(serde_json::to_vec(data)?).map_err(|e| {
+                Error::Other(format!("cannot canonicalize \"{}\": {e}", entry.identifier))
+            })?;
+            canonical.as_bytes()
+        }
+        (None, Some(bytes)) => bytes,
+        (None, None) => return Ok(false),
+    };
+    match ai_catalog_trust::verify_digest(&subject.digest, content) {
+        Ok(true) => Ok(true),
+        Ok(false) => Err(Error::Other(format!(
+            "content of \"{}\" does not match its subject.digest {}",
+            entry.identifier, subject.digest
+        ))),
+        Err(e) => Err(Error::Other(format!(
+            "cannot check subject.digest of \"{}\": {e}",
+            entry.identifier
+        ))),
+    }
 }
 
 fn resolve_output_path(output_path: Option<&str>, stem: &str, ext: &str) -> PathBuf {

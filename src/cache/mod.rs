@@ -117,18 +117,19 @@ impl CacheManager {
         Ok(true)
     }
 
+    /// Read a stored object. The hash comes from the registry file, so it is
+    /// checked before it is used to build a path.
+    pub fn read_object(&self, hash: &str) -> Result<Vec<u8>> {
+        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::Other(format!("invalid content hash \"{hash}\"")));
+        }
+        std::fs::read(self.object_path(hash))
+            .map_err(|e| Error::Other(format!("cannot read cached catalog {hash}: {e}")))
+    }
+
     /// Compute the `file://` URL for an object given its hash.
     pub fn object_file_url(&self, hash: &str) -> String {
         format!("file://{}", self.object_path(hash).display())
-    }
-
-    /// If `path` is inside the objects directory, return the hash (filename stem).
-    pub fn hash_from_object_path<'a>(&self, path: &'a str) -> Option<&'a str> {
-        let objects = self.objects_dir();
-        let objects_str = objects.to_string_lossy();
-        let prefix = format!("{}/", objects_str);
-        let rel = path.strip_prefix(prefix.as_str())?;
-        rel.strip_suffix(".json")
     }
 }
 
@@ -186,6 +187,13 @@ mod tests {
             cache.object_path("abc123"),
             dir.path().join("objects").join("abc123.json")
         );
+    }
+
+    #[test]
+    fn read_object_rejects_a_hash_that_is_not_hex() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = make_cache(&dir);
+        assert!(cache.read_object("../../etc/passwd").is_err());
     }
 
     #[test]

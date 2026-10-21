@@ -122,17 +122,6 @@ where
     }
 }
 
-fn run_consumer<F>(fut: F) -> error::Result<()>
-where
-    F: std::future::Future<Output = error::Result<()>>,
-{
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(error::Error::Io)?
-        .block_on(fut)
-}
-
 fn consumer_error_to_io(err: error::Error, stderr: &mut impl Write) -> io::Result<i32> {
     writeln!(stderr, "error: {err}")?;
     Ok(1)
@@ -157,7 +146,7 @@ fn catalog_command<W: Write, E: Write>(
                 writeln!(stderr, "usage: {BIN_NAME} catalog add <name> <url>")?;
                 return Ok(2);
             }
-            match run_consumer(commands::catalog_add::execute(&remaining[0], &remaining[1])) {
+            match commands::catalog_add::execute(&remaining[0], &remaining[1]) {
                 Ok(()) => Ok(0),
                 Err(e) => consumer_error_to_io(e, stderr),
             }
@@ -169,7 +158,7 @@ fn catalog_command<W: Write, E: Write>(
             } else {
                 commands::OutputFormat::Table
             };
-            match run_consumer(commands::catalog_list::execute(fmt)) {
+            match commands::catalog_list::execute(fmt) {
                 Ok(()) => Ok(0),
                 Err(e) => consumer_error_to_io(e, stderr),
             }
@@ -179,7 +168,7 @@ fn catalog_command<W: Write, E: Write>(
                 writeln!(stderr, "usage: {BIN_NAME} catalog remove <name-or-url>")?;
                 return Ok(2);
             }
-            match run_consumer(commands::catalog_remove::execute(&remaining[0])) {
+            match commands::catalog_remove::execute(&remaining[0]) {
                 Ok(()) => Ok(0),
                 Err(e) => consumer_error_to_io(e, stderr),
             }
@@ -189,7 +178,7 @@ fn catalog_command<W: Write, E: Write>(
                 writeln!(stderr, "usage: {BIN_NAME} catalog update <name>")?;
                 return Ok(2);
             }
-            match run_consumer(commands::catalog_update::execute(&remaining[0])) {
+            match commands::catalog_update::execute(&remaining[0]) {
                 Ok(()) => Ok(0),
                 Err(e) => consumer_error_to_io(e, stderr),
             }
@@ -237,7 +226,7 @@ fn search_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> 
     } else {
         commands::OutputFormat::Table
     };
-    match run_consumer(commands::search::execute(&keyword, use_regex, limit, fmt)) {
+    match commands::search::execute(&keyword, use_regex, limit, fmt) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }
@@ -274,12 +263,7 @@ fn show_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
     } else {
         commands::OutputFormat::Table
     };
-    match run_consumer(commands::show::execute(
-        &identifier,
-        fmt,
-        scope.as_deref(),
-        media_type.as_deref(),
-    )) {
+    match commands::show::execute(&identifier, fmt, scope.as_deref(), media_type.as_deref()) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }
@@ -313,12 +297,12 @@ fn pull_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32> {
         )?;
         return Ok(2);
     };
-    match run_consumer(commands::pull::execute(
+    match commands::pull::execute(
         &identifier,
         output_path.as_deref(),
         scope.as_deref(),
         media_type.as_deref(),
-    )) {
+    ) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }
@@ -670,11 +654,7 @@ fn oci_add_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32>
         )?;
         return Ok(2);
     };
-    match run_consumer(commands::oci_add::execute(
-        &name,
-        &layout_path,
-        ref_name.as_deref(),
-    )) {
+    match commands::oci_add::execute(&name, &layout_path, ref_name.as_deref()) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }
@@ -711,9 +691,7 @@ fn oci_search_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i
     } else {
         commands::OutputFormat::Table
     };
-    match run_consumer(commands::oci_search::execute(
-        &keyword, use_regex, limit, fmt,
-    )) {
+    match commands::oci_search::execute(&keyword, use_regex, limit, fmt) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }
@@ -746,11 +724,7 @@ fn oci_show_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32
     } else {
         commands::OutputFormat::Table
     };
-    match run_consumer(commands::oci_show::execute(
-        &identifier,
-        fmt,
-        media_type.as_deref(),
-    )) {
+    match commands::oci_show::execute(&identifier, fmt, media_type.as_deref()) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }
@@ -780,11 +754,7 @@ fn oci_pull_command<E: Write>(args: &[String], stderr: &mut E) -> io::Result<i32
         )?;
         return Ok(2);
     };
-    match run_consumer(commands::oci_pull::execute(
-        &identifier,
-        output_path.as_deref(),
-        media_type.as_deref(),
-    )) {
+    match commands::oci_pull::execute(&identifier, output_path.as_deref(), media_type.as_deref()) {
         Ok(()) => Ok(0),
         Err(e) => consumer_error_to_io(e, stderr),
     }

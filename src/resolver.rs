@@ -2,578 +2,223 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
-use reqwest::Client;
+use reqwest::blocking::Client;
 use serde_json::json;
 
 use ai_catalog::{AiCatalog, CatalogEntry};
 
 use crate::cache::{CacheManager, content_hash};
 use crate::error::{Error, Result};
-use crate::fetch::fetch_catalog;
+use crate::fetch::{build_client, fetch_catalog, is_file_url, join};
 
-/// Resolve `nested_url` relative to `base_url` (the parent catalog's URL).
-/// If `nested_url` already has a scheme, return it unchanged.
-/// For `file://` parents, resolve against the parent directory.
-/// For HTTP(S) parents, use standard URL joining.
-fn resolve_nested_url(base_url: &str, nested_url: &str) -> String {
-    if nested_url.contains("://") {
-        return nested_url.to_string();
-    }
-    if let Some(base_path) = base_url.strip_prefix("file://") {
-        let parent = std::path::Path::new(base_path)
-            .parent()
-            .unwrap_or(std::path::Path::new("/"));
-        let resolved = parent.join(nested_url);
-        // Canonicalize to resolve `..` and `.` components if the path exists.
-        let abs = std::fs::canonicalize(&resolved).unwrap_or(resolved);
-        return format!("file://{}", abs.display());
-    }
-    // HTTP(S): strip the last path component and join.
-    if let Some(slash) = base_url.rfind('/') {
-        format!("{}/{}", &base_url[..slash], nested_url)
-    } else {
-        nested_url.to_string()
-    }
-}
-
+/// Deepest nesting of catalogs within catalogs that is followed (spec: 4 recommended).
 const MAX_DEPTH: usize = 4;
 
-/// A catalog entry together with provenance information.
+/// `ResolvedEntry::source_catalog_url` of the entries of the local registry itself.
+pub const REGISTRY: &str = "registry";
+
+/// A catalog entry and the URL of the catalog document it was listed in.
 #[derive(Debug, Clone)]
 pub struct ResolvedEntry {
     pub entry: CatalogEntry,
-    /// The URL (remote or `file://`) from which this entry's parent catalog was loaded.
     pub source_catalog_url: String,
 }
 
-// ── Download mode ────────────────────────────────────────────────────────────
-
-/// Fetch a catalog and all its nested catalogs recursively, storing every
-/// catalog in the CAS (`~/.ai-catalog/objects/`) and recording URL→hash in refs.
+/// Walks a catalog and the catalogs nested in it.
 ///
-/// Returns all non-catalog entries found in the tree.
-pub async fn resolve_and_cache(
-    root_url: &str,
-    client: &Client,
-    cache: &CacheManager,
-) -> Result<Vec<ResolvedEntry>> {
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut url_to_hash = cache.read_refs()?;
-    let mut entries = Vec::new();
-
-    resolve_and_cache_inner(
-        root_url,
-        client,
-        cache,
-        0,
-        &mut visited,
-        &mut url_to_hash,
-        &mut entries,
-    )
-    .await?;
-
-    cache.write_refs(&url_to_hash)?;
-    Ok(entries)
+/// An online resolver fetches nested catalogs and stores them in the cache; an
+/// offline one reads only what the cache already holds. Problems with a nested
+/// catalog are collected as warnings and never abort the walk.
+pub struct Resolver<'a> {
+    cache: &'a CacheManager,
+    refs: HashMap<String, String>,
+    client: Option<Client>,
+    /// Catalog URLs on the current traversal path, to reject cycles.
+    path: Vec<String>,
+    found: Vec<ResolvedEntry>,
+    warnings: Vec<String>,
 }
 
-#[async_recursion::async_recursion]
-async fn resolve_and_cache_inner(
-    url: &str,
-    client: &Client,
-    cache: &CacheManager,
-    depth: usize,
-    visited: &mut HashSet<String>,
-    url_to_hash: &mut std::collections::HashMap<String, String>,
-    entries: &mut Vec<ResolvedEntry>,
-) -> Result<()> {
-    if visited.contains(url) {
-        return Err(Error::CircularReference(url.to_string()));
-    }
-    if depth > MAX_DEPTH {
-        return Err(Error::MaxDepthExceeded(MAX_DEPTH));
+impl<'a> Resolver<'a> {
+    pub fn offline(cache: &'a CacheManager) -> Result<Self> {
+        Ok(Resolver {
+            cache,
+            refs: cache.read_refs()?,
+            client: None,
+            path: Vec::new(),
+            found: Vec::new(),
+            warnings: Vec::new(),
+        })
     }
 
-    visited.insert(url.to_string());
+    pub fn online(cache: &'a CacheManager) -> Result<Self> {
+        cache.ensure_dirs()?;
+        Ok(Resolver {
+            client: Some(build_client()?),
+            ..Self::offline(cache)?
+        })
+    }
 
-    let (catalog, bytes) = fetch_catalog(url, client).await?;
-    let hash = content_hash(&bytes);
+    /// Fetch the catalog at `url` and everything nested in it, caching each
+    /// document. Returns the content hash of the root document.
+    pub fn fetch(&mut self, url: &str) -> Result<String> {
+        let client = self
+            .client
+            .as_ref()
+            .expect("fetch needs an online resolver");
+        let bytes = fetch_catalog(url, client)?;
+        let catalog = serde_json::from_slice(&bytes)?;
+        let hash = self.store(url, &bytes)?;
+        self.path.push(url.to_string());
+        self.walk(&catalog, url, 0);
+        self.path.pop();
+        self.cache.write_refs(&self.refs)?;
+        Ok(hash)
+    }
 
-    cache.store_object(&hash, &bytes)?;
-    url_to_hash.insert(url.to_string(), hash.clone());
+    /// Walk the registered catalogs, optionally only those whose registry
+    /// identifier starts with `prefix`.
+    pub fn walk_registry(&mut self, prefix: Option<&str>) -> Result<()> {
+        let mut registry = self.cache.read_registry()?;
+        if let Some(prefix) = prefix {
+            registry
+                .entries
+                .retain(|e| e.identifier.starts_with(prefix));
+        }
+        self.walk(&registry, REGISTRY, 0);
+        Ok(())
+    }
 
-    process_catalog_entries(
-        &catalog,
-        url,
-        client,
-        cache,
-        depth,
-        visited,
-        url_to_hash,
-        entries,
-    )
-    .await
-}
+    /// Walk the catalog that `entry` (listed in `base`) points to or embeds.
+    pub fn descend(&mut self, entry: &CatalogEntry, base: &str) -> Result<()> {
+        if let Some((bytes, child_base)) = self.open(entry, base)? {
+            let catalog = serde_json::from_slice(&bytes)?;
+            self.path.extend([base.to_string(), child_base.clone()]);
+            self.walk(&catalog, &child_base, 0);
+            self.path.truncate(self.path.len() - 2);
+        }
+        Ok(())
+    }
 
-#[allow(clippy::too_many_arguments)]
-#[async_recursion::async_recursion]
-async fn process_catalog_entries(
-    catalog: &AiCatalog,
-    source_url: &str,
-    client: &Client,
-    cache: &CacheManager,
-    depth: usize,
-    visited: &mut HashSet<String>,
-    url_to_hash: &mut std::collections::HashMap<String, String>,
-    entries: &mut Vec<ResolvedEntry>,
-) -> Result<()> {
-    for entry in &catalog.entries {
-        if entry.is_nested_catalog() {
-            if let Some(nested_url) = &entry.url {
-                let resolved = resolve_nested_url(source_url, nested_url);
-                if let Err(e) = resolve_and_cache_inner(
-                    &resolved,
-                    client,
-                    cache,
-                    depth + 1,
-                    visited,
-                    url_to_hash,
-                    entries,
-                )
-                .await
-                {
-                    eprintln!(
-                        "Warning: skipping nested catalog \"{}\": {e}",
-                        entry.identifier
-                    );
-                }
-            } else if let Some(data) = &entry.data {
-                // Inline nested catalog
-                match serde_json::from_value::<AiCatalog>(data.clone()) {
-                    Ok(inline_catalog) => {
-                        let inline_url = format!("inline:{}", entry.identifier);
-                        if !visited.contains(&inline_url) {
-                            visited.insert(inline_url.clone());
-                            process_catalog_entries(
-                                &inline_catalog,
-                                &inline_url,
-                                client,
-                                cache,
-                                depth + 1,
-                                visited,
-                                url_to_hash,
-                                entries,
-                            )
-                            .await?;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: could not parse inline catalog for {}: {e}",
-                            entry.identifier
-                        );
-                    }
-                }
-            }
-        } else {
-            entries.push(ResolvedEntry {
+    /// The document of a catalog entry, as stored.
+    pub fn catalog_bytes(&mut self, entry: &CatalogEntry, base: &str) -> Result<Vec<u8>> {
+        self.open(entry, base)?
+            .map(|(bytes, _)| bytes)
+            .ok_or_else(|| Error::Other(format!("entry \"{}\" has no URL", entry.identifier)))
+    }
+
+    /// The first entry with this identifier, catalogs included.
+    pub fn find(&self, identifier: &str) -> Option<&ResolvedEntry> {
+        self.found.iter().find(|f| f.entry.identifier == identifier)
+    }
+
+    pub fn leaves(&self) -> impl Iterator<Item = &ResolvedEntry> {
+        self.found.iter().filter(|f| !f.entry.is_nested_catalog())
+    }
+
+    /// Print the warnings and hand over everything found, catalogs included.
+    pub fn into_found(self) -> Vec<ResolvedEntry> {
+        for warning in &self.warnings {
+            eprintln!("warning: {warning}");
+        }
+        self.found
+    }
+
+    fn walk(&mut self, catalog: &AiCatalog, base: &str, depth: usize) {
+        let in_registry = base == REGISTRY;
+        for entry in &catalog.entries {
+            self.found.push(ResolvedEntry {
                 entry: entry.clone(),
-                source_catalog_url: source_url.to_string(),
+                source_catalog_url: base.to_string(),
             });
-        }
-    }
-    Ok(())
-}
-
-// ── Offline (local-only) mode ─────────────────────────────────────────────────
-
-/// Resolve the local registry recursively without making any network requests.
-/// Uses `refs.json` to map remote URLs encountered in stored catalogs to local objects.
-pub async fn resolve_local(cache: &CacheManager) -> Result<Vec<ResolvedEntry>> {
-    let registry = cache.read_registry()?;
-    let url_to_hash = cache.read_refs()?;
-    // Invert refs so we can look up the original URL for a cached object hash.
-    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
-        .iter()
-        .map(|(k, v)| (v.clone(), k.clone()))
-        .collect();
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut entries = Vec::new();
-
-    let registry_path = format!("file://{}", cache.registry_path().display());
-    visited.insert(registry_path.clone());
-
-    resolve_local_inner(
-        &registry,
-        &registry_path,
-        0,
-        &url_to_hash,
-        &hash_to_url,
-        &mut visited,
-        &mut entries,
-        cache,
-    );
-
-    Ok(entries)
-}
-
-/// Resolve entries from a single catalog file URL (must be `file://`),
-/// using `refs.json` for any nested catalog references. Does not touch
-/// the registry — useful for scoping a pull to one registered catalog.
-pub fn resolve_local_from_url(file_url: &str, cache: &CacheManager) -> Result<Vec<ResolvedEntry>> {
-    let path = file_url.strip_prefix("file://").unwrap_or(file_url);
-    let bytes = std::fs::read(path)?;
-    let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
-    let url_to_hash = cache.read_refs()?;
-    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
-        .iter()
-        .map(|(k, v)| (v.clone(), k.clone()))
-        .collect();
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut entries = Vec::new();
-    visited.insert(file_url.to_string());
-    resolve_local_inner(
-        &catalog,
-        file_url,
-        0,
-        &url_to_hash,
-        &hash_to_url,
-        &mut visited,
-        &mut entries,
-        cache,
-    );
-    Ok(entries)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn resolve_local_inner(
-    catalog: &AiCatalog,
-    source_url: &str,
-    depth: usize,
-    url_to_hash: &std::collections::HashMap<String, String>,
-    hash_to_url: &std::collections::HashMap<String, String>,
-    visited: &mut HashSet<String>,
-    entries: &mut Vec<ResolvedEntry>,
-    cache: &CacheManager,
-) {
-    for entry in &catalog.entries {
-        if entry.is_nested_catalog() {
-            let nested_url = match &entry.url {
-                Some(u) => u.clone(),
-                None => {
-                    if let Some(data) = &entry.data {
-                        // Inline nested catalog
-                        if let Ok(inline_catalog) =
-                            serde_json::from_value::<AiCatalog>(data.clone())
-                        {
-                            let inline_url = format!("inline:{}", entry.identifier);
-                            if !visited.contains(&inline_url) && depth < MAX_DEPTH {
-                                visited.insert(inline_url.clone());
-                                resolve_local_inner(
-                                    &inline_catalog,
-                                    &inline_url,
-                                    depth + 1,
-                                    url_to_hash,
-                                    hash_to_url,
-                                    visited,
-                                    entries,
-                                    cache,
-                                );
-                            }
-                        }
-                    }
-                    continue;
-                }
-            };
-
-            // For relative URLs, resolve against the original source URL (not a cache path).
-            // If source_url is a cache object path, recover the original via hash_to_url.
-            let effective_base = if let Some(hash) = source_url
-                .strip_prefix("file://")
-                .and_then(|p| cache.hash_from_object_path(p))
-            {
-                hash_to_url
-                    .get(hash)
-                    .map(String::as_str)
-                    .unwrap_or(source_url)
-            } else {
-                source_url
-            };
-
-            let resolved_url = resolve_nested_url(effective_base, &nested_url);
-            if visited.contains(&resolved_url) || depth >= MAX_DEPTH {
+            if !entry.is_nested_catalog() {
                 continue;
             }
-            visited.insert(resolved_url.clone());
-            let local_url = if resolved_url.starts_with("file://") {
-                resolved_url.clone()
-            } else if let Some(hash) = url_to_hash.get(&resolved_url) {
-                cache.object_file_url(hash)
-            } else {
-                // Not cached — skip gracefully
-                eprintln!("Warning: nested catalog not in local cache, skipping: {resolved_url}");
+            if !in_registry && depth >= MAX_DEPTH {
+                self.warn(entry, Error::MaxDepthExceeded(MAX_DEPTH));
                 continue;
-            };
-
-            let path = local_url.strip_prefix("file://").unwrap_or(&local_url);
-            match std::fs::read(path) {
-                Ok(bytes) => match serde_json::from_slice::<AiCatalog>(&bytes) {
-                    Ok(nested_catalog) => {
-                        resolve_local_inner(
-                            &nested_catalog,
-                            &resolved_url,
-                            depth + 1,
-                            url_to_hash,
-                            hash_to_url,
-                            visited,
-                            entries,
-                            cache,
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: could not parse cached catalog at {local_url}: {e}");
-                    }
-                },
-                Err(e) => {
-                    eprintln!("Warning: could not read cached catalog at {local_url}: {e}");
-                }
             }
-        } else {
-            entries.push(ResolvedEntry {
-                entry: entry.clone(),
-                source_catalog_url: source_url.to_string(),
+            let opened = self.open(entry, base).and_then(|opened| {
+                opened
+                    .map(|(bytes, child_base)| Ok((serde_json::from_slice(&bytes)?, child_base)))
+                    .transpose()
             });
-        }
-    }
-}
-
-// ── Entry search (includes catalog-type entries) ──────────────────────────────
-
-/// Search the entire local catalog tree for an entry by identifier,
-/// including catalog-type entries that resolve_local skips.
-pub fn find_entry_by_id_in_registry(
-    id: &str,
-    cache: &CacheManager,
-) -> Result<Option<CatalogEntry>> {
-    let registry = cache.read_registry()?;
-    let url_to_hash = cache.read_refs()?;
-    let mut visited = HashSet::new();
-    Ok(search_catalog_for_id(
-        &registry,
-        id,
-        &url_to_hash,
-        &mut visited,
-        0,
-        cache,
-    ))
-}
-
-/// Search within a specific local catalog file for an entry by identifier,
-/// including catalog-type entries.
-pub fn find_entry_by_id_in_url(
-    id: &str,
-    file_url: &str,
-    cache: &CacheManager,
-) -> Result<Option<CatalogEntry>> {
-    let path = file_url.strip_prefix("file://").unwrap_or(file_url);
-    let bytes = std::fs::read(path)?;
-    let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
-    let url_to_hash = cache.read_refs()?;
-    let mut visited = HashSet::new();
-    visited.insert(file_url.to_string());
-    Ok(search_catalog_for_id(
-        &catalog,
-        id,
-        &url_to_hash,
-        &mut visited,
-        0,
-        cache,
-    ))
-}
-
-/// Resolve the leaf (non-catalog) entries of an already-parsed AiCatalog struct.
-/// Used when a catalog entry's content has already been fetched or inlined.
-pub fn resolve_catalog_leaf_entries(
-    catalog: &AiCatalog,
-    source_url: &str,
-    cache: &CacheManager,
-) -> Result<Vec<ResolvedEntry>> {
-    let url_to_hash = cache.read_refs()?;
-    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
-        .iter()
-        .map(|(k, v)| (v.clone(), k.clone()))
-        .collect();
-    let mut visited = HashSet::new();
-    let mut entries = Vec::new();
-    visited.insert(source_url.to_string());
-    resolve_local_inner(
-        catalog,
-        source_url,
-        0,
-        &url_to_hash,
-        &hash_to_url,
-        &mut visited,
-        &mut entries,
-        cache,
-    );
-    Ok(entries)
-}
-
-/// Get the leaf (non-catalog) entries of a catalog-type `CatalogEntry`,
-/// handling both inline `data` and cached `url` sources.
-pub fn catalog_leaf_entries_for_entry(
-    entry: &CatalogEntry,
-    cache: &CacheManager,
-) -> Result<Vec<ResolvedEntry>> {
-    if let Some(data) = &entry.data {
-        let catalog: AiCatalog = serde_json::from_value(data.clone())?;
-        let source_url = format!("inline:{}", entry.identifier);
-        return resolve_catalog_leaf_entries(&catalog, &source_url, cache);
-    }
-
-    let file_url = entry.url.as_deref().ok_or_else(|| {
-        Error::Other(format!("catalog entry \"{}\" has no URL", entry.identifier))
-    })?;
-
-    let path = file_url.strip_prefix("file://").unwrap_or(file_url);
-    let bytes = std::fs::read(path).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            e.kind(),
-            format!("cannot read cached catalog at {file_url}: {e}"),
-        ))
-    })?;
-    let catalog: AiCatalog = serde_json::from_slice(&bytes)?;
-    resolve_catalog_leaf_entries(&catalog, file_url, cache)
-}
-
-fn search_catalog_for_id(
-    catalog: &AiCatalog,
-    id: &str,
-    url_to_hash: &std::collections::HashMap<String, String>,
-    visited: &mut HashSet<String>,
-    depth: usize,
-    cache: &CacheManager,
-) -> Option<CatalogEntry> {
-    for entry in &catalog.entries {
-        if entry.identifier == id {
-            return Some(entry.clone());
-        }
-        if !entry.is_nested_catalog() || depth >= MAX_DEPTH {
-            continue;
-        }
-        if let Some(nested_url) = &entry.url {
-            if visited.contains(nested_url) {
-                continue;
-            }
-            visited.insert(nested_url.clone());
-            let local_url = if nested_url.starts_with("file://") {
-                nested_url.clone()
-            } else {
-                match url_to_hash.get(nested_url.as_str()) {
-                    Some(hash) => cache.object_file_url(hash),
-                    None => continue,
+            match opened {
+                Ok(Some((child, child_base))) => {
+                    self.path.push(child_base.clone());
+                    self.walk(&child, &child_base, if in_registry { 0 } else { depth + 1 });
+                    self.path.pop();
                 }
+                Ok(None) => {}
+                Err(e) => self.warn(entry, e),
+            }
+        }
+    }
+
+    fn warn(&mut self, entry: &CatalogEntry, reason: impl std::fmt::Display) {
+        self.warnings.push(format!(
+            "skipping nested catalog \"{}\": {reason}",
+            entry.identifier
+        ));
+    }
+
+    /// The bytes of the catalog `entry` refers to, and the base for its own references.
+    fn open(&mut self, entry: &CatalogEntry, base: &str) -> Result<Option<(Vec<u8>, String)>> {
+        if base == REGISTRY {
+            let ext = cli_extension(entry)
+                .ok_or_else(|| Error::Other("registry entry has no bookkeeping".into()))?;
+            let field = |name: &str| ext.get(name).and_then(|v| v.as_str());
+            let (Some(hash), Some(source)) = (field("contentHash"), field("sourceUrl")) else {
+                return Err(Error::Other("registry entry is incomplete".into()));
             };
-            let path = local_url.strip_prefix("file://").unwrap_or(&local_url);
-            if let Ok(bytes) = std::fs::read(path)
-                && let Ok(nested) = serde_json::from_slice::<AiCatalog>(&bytes)
-                && let Some(found) =
-                    search_catalog_for_id(&nested, id, url_to_hash, visited, depth + 1, cache)
-            {
-                return Some(found);
-            }
-        } else if let Some(data) = &entry.data
-            && let Ok(inline) = serde_json::from_value::<AiCatalog>(data.clone())
-        {
-            let inline_url = format!("inline:{}", entry.identifier);
-            if !visited.contains(&inline_url) {
-                visited.insert(inline_url.clone());
-                if let Some(found) =
-                    search_catalog_for_id(&inline, id, url_to_hash, visited, depth + 1, cache)
-                {
-                    return Some(found);
-                }
-            }
+            return Ok(Some((self.cache.read_object(hash)?, source.to_string())));
         }
+        if let Some(data) = &entry.data {
+            return Ok(Some((serde_json::to_vec_pretty(data)?, base.to_string())));
+        }
+        let Some(reference) = &entry.url else {
+            return Ok(None);
+        };
+        let url = join(base, reference)?;
+        if !allowed(base, &url) {
+            return Err(Error::Other(format!("{url} may not be loaded from {base}")));
+        }
+        if self.path.contains(&url) {
+            return Err(Error::CircularReference(url));
+        }
+        Ok(Some((self.load(&url)?, url)))
     }
-    None
+
+    fn load(&mut self, url: &str) -> Result<Vec<u8>> {
+        let Some(client) = &self.client else {
+            let hash = self.refs.get(url).ok_or_else(|| {
+                Error::Other(format!(
+                    "{url} is not in the local cache; run `ai-catalog catalog update`"
+                ))
+            })?;
+            return self.cache.read_object(hash);
+        };
+        let bytes = fetch_catalog(url, client)?;
+        serde_json::from_slice::<AiCatalog>(&bytes)?;
+        self.store(url, &bytes)?;
+        Ok(bytes)
+    }
+
+    fn store(&mut self, url: &str, bytes: &[u8]) -> Result<String> {
+        let hash = content_hash(bytes);
+        self.cache.store_object(&hash, bytes)?;
+        self.refs.insert(url.to_string(), hash.clone());
+        Ok(hash)
+    }
 }
 
-// ── OCI-scoped queries ────────────────────────────────────────────────────────
-
-/// Resolve entries only from OCI-sourced catalogs (those added via `oci add`).
-/// Registry entries for OCI catalogs carry an `urn:ai-catalog:oci:` identifier prefix.
-pub async fn resolve_local_oci(cache: &CacheManager) -> Result<Vec<ResolvedEntry>> {
-    let registry = cache.read_registry()?;
-    let url_to_hash = cache.read_refs()?;
-    let hash_to_url: std::collections::HashMap<String, String> = url_to_hash
-        .iter()
-        .map(|(k, v)| (v.clone(), k.clone()))
-        .collect();
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut entries = Vec::new();
-
-    for entry in &registry.entries {
-        if !entry.identifier.starts_with("urn:ai-catalog:oci:") {
-            continue;
-        }
-        if let Some(url) = &entry.url {
-            if visited.contains(url) {
-                continue;
-            }
-            visited.insert(url.clone());
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            if let Ok(bytes) = std::fs::read(path)
-                && let Ok(catalog) = serde_json::from_slice::<AiCatalog>(&bytes)
-            {
-                resolve_local_inner(
-                    &catalog,
-                    url,
-                    0,
-                    &url_to_hash,
-                    &hash_to_url,
-                    &mut visited,
-                    &mut entries,
-                    cache,
-                );
-            }
-        }
-    }
-
-    Ok(entries)
-}
-
-/// Search for an entry by identifier within OCI-sourced catalogs only.
-pub fn find_entry_by_id_oci(id: &str, cache: &CacheManager) -> Result<Option<CatalogEntry>> {
-    let registry = cache.read_registry()?;
-    let url_to_hash = cache.read_refs()?;
-    let mut visited = HashSet::new();
-
-    for entry in &registry.entries {
-        if !entry.identifier.starts_with("urn:ai-catalog:oci:") {
-            continue;
-        }
-        if let Some(url) = &entry.url {
-            if visited.contains(url) {
-                continue;
-            }
-            visited.insert(url.clone());
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            if let Ok(bytes) = std::fs::read(path)
-                && let Ok(catalog) = serde_json::from_slice::<AiCatalog>(&bytes)
-            {
-                let mut sub_visited = visited.clone();
-                if let Some(found) =
-                    search_catalog_for_id(&catalog, id, &url_to_hash, &mut sub_visited, 0, cache)
-                {
-                    return Ok(Some(found));
-                }
-            }
-        }
-    }
-
-    Ok(None)
+/// A reference found in a catalog may point at an `https` URL, or at a local
+/// file only when the catalog is a local file itself. A remote catalog must
+/// never be able to make the CLI read from the local disk.
+pub fn allowed(base: &str, url: &str) -> bool {
+    url.starts_with("https://") || (is_file_url(url) && is_file_url(base))
 }
 
 /// Namespace for the CLI's own bookkeeping. The specification requires every
@@ -616,224 +261,141 @@ pub fn cli_extension(entry: &CatalogEntry) -> Option<&serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use crate::fetch::local_path_to_file_url;
+    use std::path::Path;
 
-    fn make_cache(dir: &tempfile::TempDir) -> CacheManager {
-        CacheManager::with_base_dir(dir.path().to_path_buf())
-    }
-
-    fn leaf_entry(id: &str, entry_type: &str) -> CatalogEntry {
-        CatalogEntry {
-            identifier: id.to_string(),
-            display_name: None,
-            entry_type: entry_type.to_string(),
-            url: Some(format!("https://example.com/{id}.json")),
-            data: None,
-            version: None,
-            description: None,
-            tags: vec![],
-            publisher: None,
-            trust_manifest: None,
-            updated_at: None,
-            extensions: None,
-            extra_fields: BTreeMap::new(),
-        }
-    }
-
-    fn catalog_entry(id: &str, nested_url: &str) -> CatalogEntry {
-        CatalogEntry {
-            identifier: id.to_string(),
-            display_name: None,
-            entry_type: "application/ai-catalog+json".to_string(),
-            url: Some(nested_url.to_string()),
-            data: None,
-            version: None,
-            description: None,
-            tags: vec![],
-            publisher: None,
-            trust_manifest: None,
-            updated_at: None,
-            extensions: None,
-            extra_fields: BTreeMap::new(),
-        }
-    }
-
-    fn bare_catalog(entries: Vec<CatalogEntry>) -> AiCatalog {
-        AiCatalog {
-            spec_version: "1.0".to_string(),
-            host: None,
-            entries,
-            signature: None,
-            extensions: None,
-            extra_fields: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn make_entry_extensions_nests_fields_under_the_cli_key() {
-        let extensions = make_entry_extensions("https://example.com/catalog.json", "deadbeef", 42);
-        assert_eq!(extensions.len(), 1);
-
-        let meta = &extensions[CLI_EXTENSION_KEY];
-        assert_eq!(meta["sourceUrl"], "https://example.com/catalog.json");
-        assert_eq!(meta["contentHash"], "deadbeef");
-        assert_eq!(meta["entryCount"], 42);
-        assert!(meta["lastUpdated"].is_string());
-    }
-
-    #[test]
-    fn cli_extension_reads_back_what_make_entry_extensions_wrote() {
-        let mut entry = leaf_entry("urn:test:entry", "application/json");
-        entry.extensions = Some(make_entry_extensions(
-            "https://example.com/catalog.json",
-            "deadbeef",
-            42,
-        ));
-
-        let meta = cli_extension(&entry).expect("the CLI block should be present");
-        assert_eq!(meta["sourceUrl"], "https://example.com/catalog.json");
-    }
-
-    #[test]
-    fn cli_extension_ignores_other_publishers_extensions() {
-        let mut entry = leaf_entry("urn:test:entry", "application/json");
-        let mut extensions = BTreeMap::new();
-        extensions.insert("com.example.other".to_string(), json!({"sourceUrl": "x"}));
-        entry.extensions = Some(extensions);
-
-        assert!(cli_extension(&entry).is_none());
-    }
-
-    #[test]
-    fn resolve_catalog_leaf_entries_empty_catalog() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        let catalog = bare_catalog(vec![]);
-        let entries = resolve_catalog_leaf_entries(&catalog, "file:///test", &cache).unwrap();
-        assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn resolve_catalog_leaf_entries_returns_non_catalog_entries() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        let catalog = bare_catalog(vec![
-            leaf_entry("urn:test:a", "application/json"),
-            leaf_entry("urn:test:b", "application/parquet"),
-        ]);
-        let entries = resolve_catalog_leaf_entries(&catalog, "file:///test", &cache).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].entry.identifier, "urn:test:a");
-        assert_eq!(entries[1].entry.identifier, "urn:test:b");
-        assert_eq!(entries[0].source_catalog_url, "file:///test");
-    }
-
-    #[test]
-    fn resolve_catalog_leaf_entries_skips_nested_without_local_cache() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        // A catalog with one leaf and one nested catalog (URL not in cache)
-        let catalog = bare_catalog(vec![
-            leaf_entry("urn:test:leaf", "application/json"),
-            catalog_entry("urn:test:nested", "https://example.com/nested.json"),
-        ]);
-        let entries = resolve_catalog_leaf_entries(&catalog, "file:///root", &cache).unwrap();
-        // Only the leaf entry should be returned — nested skipped (not in cache)
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.identifier, "urn:test:leaf");
-    }
-
-    #[test]
-    fn find_entry_by_id_in_registry_returns_none_on_empty() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        let result = find_entry_by_id_in_registry("urn:test:missing", &cache).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn find_entry_by_id_in_url_found() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        let catalog = bare_catalog(vec![
-            leaf_entry("urn:test:target", "application/json"),
-            leaf_entry("urn:test:other", "application/parquet"),
-        ]);
-        let json = serde_json::to_vec(&catalog).unwrap();
-        let catalog_path = dir.path().join("catalog.json");
-        std::fs::write(&catalog_path, &json).unwrap();
-        let file_url = format!("file://{}", catalog_path.display());
-        let result = find_entry_by_id_in_url("urn:test:target", &file_url, &cache).unwrap();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().identifier, "urn:test:target");
-    }
-
-    #[test]
-    fn find_entry_by_id_in_url_not_found_returns_none() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        let catalog = bare_catalog(vec![leaf_entry("urn:test:only", "application/json")]);
-        let json = serde_json::to_vec(&catalog).unwrap();
-        let catalog_path = dir.path().join("catalog.json");
-        std::fs::write(&catalog_path, &json).unwrap();
-        let file_url = format!("file://{}", catalog_path.display());
-        let result = find_entry_by_id_in_url("urn:test:nonexistent", &file_url, &cache).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn resolve_and_cache_simple_catalog() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        cache.ensure_dirs().unwrap();
-
-        let catalog = bare_catalog(vec![
-            leaf_entry("urn:test:alpha", "application/json"),
-            leaf_entry("urn:test:beta", "application/parquet"),
-        ]);
-        let json = serde_json::to_vec(&catalog).unwrap();
-        let catalog_path = dir.path().join("root.json");
-        std::fs::write(&catalog_path, &json).unwrap();
-        let url = format!("file://{}", catalog_path.display());
-
-        let client = crate::fetch::build_client().unwrap();
-        let entries = resolve_and_cache(&url, &client, &cache).await.unwrap();
-
-        // Both leaf entries returned
-        assert_eq!(entries.len(), 2);
-        let ids: Vec<&str> = entries
+    fn write_catalog(dir: &Path, name: &str, entries: &[(&str, Option<&str>)]) -> String {
+        let entries: Vec<_> = entries
             .iter()
-            .map(|e| e.entry.identifier.as_str())
+            .map(|(id, nested)| match nested {
+                Some(url) => json!({
+                    "identifier": id, "type": "application/ai-catalog+json", "url": url
+                }),
+                None => json!({
+                    "identifier": id, "type": "application/json", "url": "https://example.com/a.json"
+                }),
+            })
             .collect();
-        assert!(ids.contains(&"urn:test:alpha"));
-        assert!(ids.contains(&"urn:test:beta"));
-
-        // CAS should contain the stored object
-        let refs = cache.read_refs().unwrap();
-        assert!(refs.contains_key(&url));
-        let hash = refs.get(&url).unwrap();
-        assert!(cache.object_path(hash).exists());
+        let path = dir.join(name);
+        let catalog = json!({ "specVersion": "1.0", "entries": entries });
+        std::fs::write(&path, catalog.to_string()).unwrap();
+        local_path_to_file_url(path.to_str().unwrap()).unwrap()
     }
 
-    #[tokio::test]
-    async fn resolve_and_cache_detects_circular_reference() {
+    fn fetch<'a>(cache: &'a CacheManager, root: &str) -> Resolver<'a> {
+        let mut resolver = Resolver::online(cache).unwrap();
+        resolver.fetch(root).unwrap();
+        resolver
+    }
+
+    fn leaf_ids<'a>(resolver: &'a Resolver) -> Vec<&'a str> {
+        resolver
+            .leaves()
+            .map(|f| f.entry.identifier.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn remote_catalogs_cannot_reach_local_files() {
+        assert!(allowed(
+            "https://a.example/c.json",
+            "https://b.example/c.json"
+        ));
+        assert!(allowed("file:///a/c.json", "file:///a/d.json"));
+        assert!(allowed("file:///a/c.json", "https://b.example/c.json"));
+        assert!(!allowed("https://a.example/c.json", "file:///etc/passwd"));
+        assert!(!allowed("file:///a/c.json", "http://b.example/c.json"));
+    }
+
+    #[test]
+    fn follows_nested_catalogs_and_rejects_cycles() {
         let dir = tempfile::TempDir::new().unwrap();
-        let cache = make_cache(&dir);
-        cache.ensure_dirs().unwrap();
+        let cache = CacheManager::with_base_dir(dir.path().join("cache"));
+        write_catalog(
+            dir.path(),
+            "b.json",
+            &[("b", None), ("back", Some("a.json"))],
+        );
+        let root = write_catalog(
+            dir.path(),
+            "a.json",
+            &[("a", None), ("child", Some("b.json"))],
+        );
 
-        // A catalog that references itself
-        let catalog_path = dir.path().join("self.json");
-        let url = format!("file://{}", catalog_path.display());
-        let catalog = bare_catalog(vec![catalog_entry("urn:test:self", &url)]);
-        let json = serde_json::to_vec(&catalog).unwrap();
-        std::fs::write(&catalog_path, &json).unwrap();
+        let resolver = fetch(&cache, &root);
 
-        let client = crate::fetch::build_client().unwrap();
-        // resolve_and_cache itself returns Ok (circular nested catalogs are skipped with a warning)
-        // but we can verify the root was processed
-        let result = resolve_and_cache(&url, &client, &cache).await;
-        // May succeed with 0 entries (self-ref skipped) or fail — either is acceptable
-        // What must NOT happen is an infinite loop; the call must terminate
-        let _ = result; // just verify it terminates and doesn't panic
+        assert_eq!(leaf_ids(&resolver), ["a", "b"]);
+        assert!(resolver.warnings.iter().any(|w| w.contains("circular")));
+    }
+
+    #[test]
+    fn rejects_a_cycle_that_does_not_include_the_root() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = CacheManager::with_base_dir(dir.path().join("cache"));
+        write_catalog(
+            dir.path(),
+            "c.json",
+            &[("c", None), ("back", Some("b.json"))],
+        );
+        write_catalog(
+            dir.path(),
+            "b.json",
+            &[("b", None), ("next", Some("c.json"))],
+        );
+        let root = write_catalog(
+            dir.path(),
+            "a.json",
+            &[("a", None), ("child", Some("b.json"))],
+        );
+
+        let resolver = fetch(&cache, &root);
+
+        assert_eq!(leaf_ids(&resolver), ["a", "b", "c"]);
+        assert!(resolver.warnings.iter().any(|w| w.contains("circular")));
+    }
+
+    #[test]
+    fn a_catalog_may_appear_in_two_branches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = CacheManager::with_base_dir(dir.path().join("cache"));
+        write_catalog(dir.path(), "shared.json", &[("shared", None)]);
+        write_catalog(dir.path(), "left.json", &[("left", Some("shared.json"))]);
+        write_catalog(dir.path(), "right.json", &[("right", Some("shared.json"))]);
+        let root = write_catalog(
+            dir.path(),
+            "root.json",
+            &[("l", Some("left.json")), ("r", Some("right.json"))],
+        );
+
+        let resolver = fetch(&cache, &root);
+
+        assert_eq!(leaf_ids(&resolver), ["shared", "shared"]);
+        assert!(resolver.warnings.is_empty());
+    }
+
+    #[test]
+    fn stops_at_the_maximum_depth() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = CacheManager::with_base_dir(dir.path().join("cache"));
+        for level in (0..=MAX_DEPTH + 1).rev() {
+            let next = format!("l{}.json", level + 1);
+            let id = format!("leaf{level}");
+            let mut entries = vec![(id.as_str(), None)];
+            if level <= MAX_DEPTH {
+                entries.push(("next", Some(next.as_str())));
+            }
+            write_catalog(dir.path(), &format!("l{level}.json"), &entries);
+        }
+        let root = local_path_to_file_url(dir.path().join("l0.json").to_str().unwrap()).unwrap();
+
+        let resolver = fetch(&cache, &root);
+
+        assert_eq!(resolver.leaves().count(), MAX_DEPTH + 1);
+        assert!(
+            resolver
+                .warnings
+                .iter()
+                .any(|w| w.contains("nesting depth"))
+        );
     }
 }

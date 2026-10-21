@@ -6,13 +6,11 @@ use colored::Colorize;
 
 use crate::cache::CacheManager;
 use crate::error::{Error, Result};
-use crate::fetch::build_client;
-use crate::resolver::{cli_extension, make_entry_extensions, resolve_and_cache};
+use crate::resolver::{Resolver, cli_extension, make_entry_extensions};
 
-pub async fn execute(name: &str) -> Result<()> {
+pub fn execute(name: &str) -> Result<()> {
     let cache = CacheManager::new()?;
     cache.ensure_dirs()?;
-    let client = build_client()?;
     let mut registry = cache.read_registry()?;
     let idx = registry
         .entries
@@ -38,17 +36,14 @@ pub async fn execute(name: &str) -> Result<()> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     print!("Updating \"{}\"... ", name.bold());
-    let new_entries = resolve_and_cache(&source_url, &client, &cache).await?;
-    let url_to_hash = cache.read_refs()?;
-    let new_hash = url_to_hash
-        .get(&source_url)
-        .ok_or_else(|| Error::Other("root catalog hash not found after fetch".to_string()))?
-        .clone();
+    let mut resolver = Resolver::online(&cache)?;
+    let new_hash = resolver.fetch(&source_url)?;
+    let entry_count = resolver.leaves().count();
+    resolver.into_found();
     if old_hash.as_deref() == Some(&new_hash) {
         println!("{}", "(up to date)".dimmed());
         return Ok(());
     }
-    let entry_count = new_entries.len();
     let file_url = cache.object_file_url(&new_hash);
     let extensions = make_entry_extensions(&source_url, &new_hash, entry_count);
     registry.entries[idx].url = Some(file_url);

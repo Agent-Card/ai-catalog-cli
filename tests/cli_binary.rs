@@ -838,3 +838,129 @@ fn identifiers(json: &str) -> Vec<String> {
         .map(|e| e["identifier"].as_str().unwrap().to_string())
         .collect()
 }
+
+#[test]
+fn nested_catalogs_over_plain_http_are_skipped_with_a_warning() {
+    let home = tempfile::TempDir::new().unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().join("root.json");
+    fs::write(
+        &root,
+        r#"{"specVersion": "1.0", "entries": [
+            {"identifier": "urn:test:leaf", "type": "application/json", "data": {}},
+            {"identifier": "urn:test:remote", "type": "application/ai-catalog+json",
+             "url": "http://127.0.0.1:9/catalog.json"}]}"#,
+    )
+    .unwrap();
+
+    let (ok, _, stderr) =
+        run(cmd_with_home(home.path()).args(["catalog", "add", "plain", root.to_str().unwrap()]));
+
+    assert!(ok, "{stderr}");
+    assert!(stderr.contains("urn:test:remote"), "{stderr}");
+    assert!(stderr.contains("may not be loaded"), "{stderr}");
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hex: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sha256:{hex}")
+}
+
+/// A catalog with one entry that carries a trust manifest bound to `digest`.
+fn write_bound_catalog(dir: &Path, artifact: &str, digest: &str) -> String {
+    let entry = serde_json::json!({
+        "identifier": "urn:test:bound",
+        "type": "application/json",
+        "trustManifest": {
+            "identity": "did:web:example.com",
+            "subject": {
+                "identifier": "urn:test:bound",
+                "type": "application/json",
+                "digest": digest,
+            }
+        }
+    });
+    let mut entry = entry;
+    match artifact.strip_prefix("file://") {
+        Some(_) => entry["url"] = artifact.into(),
+        None => entry["data"] = serde_json::from_str(artifact).unwrap(),
+    }
+    let path = dir.join("bound.json");
+    fs::write(
+        &path,
+        serde_json::json!({"specVersion": "1.0", "entries": [entry]}).to_string(),
+    )
+    .unwrap();
+    format!("file://{}", path.display())
+}
+
+fn pull_bound(catalog: &str, out: &Path) -> (bool, String, String) {
+    let home = tempfile::TempDir::new().unwrap();
+    run(cmd_with_home(home.path()).args([
+        "pull",
+        "--scope",
+        catalog,
+        "--output",
+        out.to_str().unwrap(),
+        "urn:test:bound",
+    ]))
+}
+
+#[test]
+fn pull_verifies_the_digest_of_a_served_artifact() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let artifact = dir.path().join("artifact.json");
+    fs::write(&artifact, b"{\"served\": true}\n").unwrap();
+    let url = format!("file://{}", artifact.display());
+    let out = dir.path().join("out");
+    fs::create_dir(&out).unwrap();
+
+    let good = write_bound_catalog(dir.path(), &url, &sha256(b"{\"served\": true}\n"));
+    let (ok, stdout, stderr) = pull_bound(&good, &out);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("digest verified"), "{stdout}");
+
+    let out = dir.path().join("rejected");
+    fs::create_dir(&out).unwrap();
+    let bad = write_bound_catalog(dir.path(), &url, &sha256(b"something else"));
+    let (ok, _, stderr) = pull_bound(&bad, &out);
+    assert!(!ok);
+    assert!(stderr.contains("does not match"), "{stderr}");
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0, "nothing is written");
+}
+
+#[test]
+fn pull_verifies_the_digest_of_inline_data_in_canonical_form() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("out");
+    fs::create_dir(&out).unwrap();
+    // Member order, spacing and `1.0` differ from the canonical `{"a":1,"b":2}`.
+    let data = r#"{ "b": 2, "a": 1.0 }"#;
+
+    let good = write_bound_catalog(dir.path(), data, &sha256(br#"{"a":1,"b":2}"#));
+    let (ok, stdout, stderr) = pull_bound(&good, &out);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("digest verified"), "{stdout}");
+
+    let bad = write_bound_catalog(dir.path(), data, &sha256(data.as_bytes()));
+    let (ok, _, stderr) = pull_bound(&bad, &out);
+    assert!(!ok);
+    assert!(stderr.contains("does not match"), "{stderr}");
+}
+
+#[test]
+fn pull_refuses_a_weak_digest() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("out");
+    fs::create_dir(&out).unwrap();
+
+    let catalog = write_bound_catalog(dir.path(), "{}", "md5:d41d8cd98f00b204e9800998ecf8427e");
+    let (ok, _, stderr) = pull_bound(&catalog, &out);
+
+    assert!(!ok);
+    assert!(stderr.contains("cannot check subject.digest"), "{stderr}");
+}

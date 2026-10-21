@@ -175,6 +175,11 @@ ai-catalog catalog add local-demo  file:///path/to/catalog.json
 
 Makes network requests. All other consumer commands operate on the local cache.
 
+References inside a catalog must be `https` (or relative to the catalog). A local
+`file://` path is followed only from a local catalog, so a remote catalog can't
+read your disk. Cycles, `http://` references and nesting beyond depth 4 are
+skipped with a warning, and catalogs are limited to 10 MiB.
+
 ---
 
 ### `catalog list`
@@ -239,9 +244,8 @@ ai-catalog show --scope https://example.com/ai-catalog.json urn:example:agent:v1
 ai-catalog show --media-type application/json urn:example:catalog:nested
 ```
 
-`--scope` accepts a registered catalog name or a URI. `file://` URIs are read
-from disk; `http://` and `https://` URIs are fetched and cached on the fly
-without registering the catalog.
+`--scope` accepts a registered catalog name or source, or a catalog URL, which
+is fetched and cached on the fly without registering it.
 
 For an entry that is itself a nested catalog, `--media-type` resolves its
 children and shows the single child of that type. Omitting it, or passing
@@ -269,6 +273,9 @@ is a file path, that path is used directly. `-` streams the artifact bytes to
 stdout. Omitting `--output` writes to the current directory.
 
 `--scope` follows the same name-or-URI rules as `show`.
+
+If the entry's trust manifest has a `subject`, the content is checked against
+`subject.digest` first, and a mismatch fails the pull. Signatures are not verified.
 
 When the identifier resolves to a nested catalog entry
 (`application/ai-catalog+json`), `--media-type` is required:
