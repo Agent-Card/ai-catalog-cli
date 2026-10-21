@@ -67,8 +67,7 @@ Or run without installing, replacing `ai-catalog` with `cargo run --` in any
 example below:
 
 ```sh
-cargo run -- help
-cargo run -- version
+cargo run -- --help
 ```
 
 ## Agent skill
@@ -124,11 +123,10 @@ ai-catalog catalog update <name>
 ai-catalog search [--regex] [-n <limit>] [--json] <keyword>
 ai-catalog show [--scope <catalog-name-or-url>] [--json] [--media-type <type>] <identifier>
 ai-catalog pull [--output <path>] [--scope <catalog-name-or-url>] [--media-type <type>] <identifier>
-ai-catalog help
-ai-catalog version
+ai-catalog --version
 ```
 
-Use `-` as `<path>` to read from stdin.
+Use `-` as `<path>` to read from stdin. Every command accepts `--help`.
 
 ---
 
