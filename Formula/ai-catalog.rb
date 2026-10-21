@@ -5,31 +5,31 @@
 class AiCatalog < Formula
   desc "Command-line tool for inspecting, validating, and packaging AI Catalog documents"
   homepage "https://github.com/Agent-Card/ai-catalog-cli"
-  version "0.2.2"
+  version "0.3.0"
   license "Apache-2.0"
   head "https://github.com/Agent-Card/ai-catalog-cli.git", branch: "main"
 
   on_macos do
     on_arm do
-      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.2.2/ai-catalog-darwin-arm64.tar.gz"
-      sha256 "4a3a095073ad9f835f363b2d246892cd6de34103cb45c6b2cfc1feb167776fbe"
+      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.3.0/ai-catalog-darwin-arm64.tar.gz"
+      sha256 "743d04bac674bd7afd0d233ac597dda835f8756c7d50954925983f86ea7bd796"
     end
 
     on_intel do
-      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.2.2/ai-catalog-darwin-amd64.tar.gz"
-      sha256 "65d3656d921ce52ca473223b82e0f02466ab8762ec108a7d10f19f4f02bd8704"
+      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.3.0/ai-catalog-darwin-amd64.tar.gz"
+      sha256 "4c77008ba658e3702849e400f5a93c6981295a31e235a9a82f6d67c59d0102ea"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.2.2/ai-catalog-linux-arm64-gnu.tar.gz"
-      sha256 "edadd1e13f39905e19b30faf844f12d276827a2d38418748337b70bc4da681f6"
+      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.3.0/ai-catalog-linux-arm64-gnu.tar.gz"
+      sha256 "1d3b8b75deba5d41d0ce9152da987c22b0d155b3c2c793ac339043ee5d58c67d"
     end
 
     on_intel do
-      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.2.2/ai-catalog-linux-amd64-gnu.tar.gz"
-      sha256 "9945114a2e288f5ad422f6fef46d1da24b41158dd3e343bea9e104dd6d701a39"
+      url "https://github.com/Agent-Card/ai-catalog-cli/releases/download/v0.3.0/ai-catalog-linux-amd64-gnu.tar.gz"
+      sha256 "13a7a6d864ac54ee30447667deab4438cc009f8b6b968b6da452fe0b785ea3b1"
     end
   end
 
