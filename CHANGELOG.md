@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.3.0...v0.3.1) - 2026-10-21
+
+### Other
+
+- update Homebrew formula for v0.3.0 ([#56](https://github.com/Agent-Card/ai-catalog-cli/pull/56))
+
 ## [0.3.0](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.2.2...v0.3.0) - 2026-10-21
 
 ### Added
