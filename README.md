@@ -162,16 +162,26 @@ cat catalog.json | ai-catalog format -
 
 ### `catalog add`
 
-Fetches a catalog from a URL (or `file://` path), stores all catalog blobs in
-the local content-addressed cache, and registers the catalog in the local
+Fetches a catalog from a URL, a domain or a local file, stores all catalog blobs
+in the local content-addressed cache, and registers the catalog in the local
 registry. Nested catalogs are fetched recursively (up to depth 4).
 
 ```sh
 ai-catalog catalog add my-registry https://example.com/ai-catalog.json
+ai-catalog catalog add example     https://example.com    # or just: example.com
 ai-catalog catalog add local-demo  file:///path/to/catalog.json
 ```
 
 Makes network requests. All other consumer commands operate on the local cache.
+
+A domain or an `https://` URL does not have to be the catalog itself. If it
+isn't one, the CLI follows the specification's
+[discovery procedure](https://ai-catalog.io/spec/#discovery): a `Link` header
+with `rel="ai-catalog"`, then an HTML `<link rel="ai-catalog">` element, then
+`/.well-known/ai-catalog.json`. The catalog that is found is the one that gets
+registered, under its own URL, which is what `catalog update` fetches again. If
+nothing is found, the error lists every URL that was tried. Files and `http://`
+URLs are used as they are, without discovery.
 
 References inside a catalog must be `https` (or relative to the catalog). A local
 `file://` path is followed only from a local catalog, so a remote catalog can't

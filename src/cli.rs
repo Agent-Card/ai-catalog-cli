@@ -60,11 +60,11 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum CatalogCommand {
-    /// Register a catalog from a URL or a file
+    /// Register a catalog from a URL, a domain or a file
     Add {
         /// Name to register the catalog under
         name: String,
-        /// URL or path of the catalog
+        /// URL or path of the catalog, or a website or domain to discover it from
         url: String,
     },
     /// List the registered catalogs

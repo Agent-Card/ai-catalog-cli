@@ -69,8 +69,13 @@ impl<'a> Resolver<'a> {
             .as_ref()
             .expect("fetch needs an online resolver");
         let bytes = fetch_catalog(url, client)?;
-        let catalog = serde_json::from_slice(&bytes)?;
-        let hash = self.store(url, &bytes)?;
+        self.fetch_bytes(url, &bytes)
+    }
+
+    /// Like [`Resolver::fetch`], for a root document the caller has fetched from `url`.
+    pub fn fetch_bytes(&mut self, url: &str, bytes: &[u8]) -> Result<String> {
+        let catalog = serde_json::from_slice(bytes)?;
+        let hash = self.store(url, bytes)?;
         self.path.push(url.to_string());
         self.walk(&catalog, url, 0);
         self.path.pop();

@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 ai-catalog = "0.3.0"
+ai-catalog-discover = "0.3.0"
 ai-catalog-oci = "0.3.0"
 ai-catalog-trust = "0.3.0"
 ai-catalog-validate = "0.3.0"
