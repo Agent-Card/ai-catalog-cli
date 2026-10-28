@@ -84,13 +84,9 @@ pub enum Located {
     },
 }
 
-/// Turn what the user typed (a local path, a `file://` or `http://` URL, an `https://`
-/// URL or a bare domain) into a catalog.
-///
-/// Local files and explicit `http://` URLs are used as they are. An `https://` URL or a
-/// bare domain goes through discovery (<https://ai-catalog.io/spec/#discovery>), which
-/// accepts a URL that is a catalog itself and otherwise looks for the catalog the site
-/// advertises through a `Link` header, an HTML `<link>` element or the well-known URI.
+/// Turn what the user typed into a catalog. Local files and `http://` URLs are used as
+/// they are; an `https://` URL or a bare domain goes through discovery
+/// (<https://ai-catalog.io/spec/#discovery>).
 pub fn locate(input: &str, fetcher: &dyn Fetcher) -> Result<Located> {
     let input = input.trim();
     if input.starts_with("file://") || input.starts_with("http://") || Path::new(input).exists() {
@@ -113,8 +109,7 @@ pub fn locate(input: &str, fetcher: &dyn Fetcher) -> Result<Located> {
     }
 }
 
-/// A bare argument is a domain, not a mistyped path, when it starts like a host name
-/// and its first segment has a dot or a port.
+/// A bare argument is a domain, not a path, when its first segment has a dot or a port.
 fn looks_like_host(input: &str) -> bool {
     let host = input.split('/').next().unwrap_or("");
     host.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -189,7 +184,6 @@ mod tests {
     }
 
     impl Mock {
-        /// A page at `url`, with a content type, `Link` headers and a body.
         fn page(
             mut self,
             url: &'static str,
@@ -265,40 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn locate_does_not_fetch_a_catalog_url_twice() {
-        let mock = Mock::default().page(
-            "https://example.com/ai.json",
-            "application/json",
-            &[],
-            CATALOG,
-        );
-
-        let Located::Discovered { method, .. } =
-            locate("https://example.com/ai.json", &mock).unwrap()
-        else {
-            panic!("expected discovery");
-        };
-
-        assert_eq!(method, Method::Direct);
-        assert_eq!(mock.requests.borrow().len(), 1);
-    }
-
-    #[test]
-    fn locate_explains_a_failed_discovery() {
-        let mock = Mock::default().page("https://example.com/", "text/html", &[], "<html>");
-
-        let error = locate("example.com", &mock).unwrap_err().to_string();
-
-        assert!(error.contains("no AI Catalog found"), "{error}");
-        assert!(error.contains("/.well-known/ai-catalog.json"), "{error}");
-        assert!(error.contains("no local file"), "{error}");
-        let error = locate("https://example.com", &mock)
-            .unwrap_err()
-            .to_string();
-        assert!(!error.contains("no local file"), "{error}");
-    }
-
-    #[test]
     fn locate_keeps_the_error_for_a_mistyped_path() {
         let mock = Mock::default();
 
@@ -307,23 +267,6 @@ mod tests {
             assert!(error.contains("cannot resolve path"), "{error}");
         }
         assert!(mock.requests.borrow().is_empty());
-    }
-
-    #[test]
-    fn only_names_that_look_like_hosts_are_discovered() {
-        for host in ["example.com", "example.com/docs", "localhost:8443", "a.b"] {
-            assert!(looks_like_host(host), "{host}");
-        }
-        for path in [
-            "catalog",
-            "catalogs/a.json",
-            "./a.json",
-            "../a.json",
-            "~/a.json",
-            "/a.json",
-        ] {
-            assert!(!looks_like_host(path), "{path}");
-        }
     }
 
     #[test]

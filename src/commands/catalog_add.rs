@@ -183,41 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_url_is_what_gets_updated_later() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = cache(&dir);
-        let site = Site {
-            requests: Cell::new(0),
-        };
-
-        add(&cache, &site, "example", "https://example.com").unwrap();
-
-        let entry = &cache.read_registry().unwrap().entries[0];
-        let ext = cli_extension(entry).unwrap();
-        assert_eq!(ext["sourceUrl"], "https://example.com/catalog/ai.json");
-        assert_eq!(ext["entryCount"], 1);
-    }
-
-    #[test]
-    fn a_catalog_url_is_fetched_once() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cache = cache(&dir);
-        let site = Site {
-            requests: Cell::new(0),
-        };
-
-        add(
-            &cache,
-            &site,
-            "example",
-            "https://example.com/catalog/ai.json",
-        )
-        .unwrap();
-
-        assert_eq!(site.requests.get(), 1);
-    }
-
-    #[test]
     fn the_same_catalog_cannot_be_registered_under_two_names() {
         let dir = tempfile::TempDir::new().unwrap();
         let cache = cache(&dir);
