@@ -133,13 +133,15 @@ cat > "$catalog_json" <<'EOF'
       "type": "application/a2a-agent-card+json",
       "description": "An A2A agent whose trust manifest will be signed in this walkthrough",
       "url": "https://example.com/agents/trusted-v1.json",
-      "trustManifest": {
-        "identity": "urn:demo:agent:trusted-v1",
-        "trustSchema": {
-          "identifier": "urn:ai-catalog:trust-schema:minimal:v1",
-          "version": "1.0"
+      "trustManifests": [
+        {
+          "contributor": "urn:demo:agent:trusted-v1",
+          "trustSchema": {
+            "identifier": "urn:ai-catalog:trust-schema:minimal:v1",
+            "version": "1.0"
+          }
         }
-      }
+      ]
     },
     {
       "identifier": "urn:demo:model:unsigned",
@@ -213,7 +215,7 @@ tm_config_digest="$(manifest_config_digest "$tm_manifest_json")"
 payload_file="$tmp_root/canonical-trust-manifest.json"
 "$ORAS_BIN" blob fetch --oci-layout --output "$payload_file" "${layout_dir}@${tm_config_digest}"
 
-echo "Canonical trust manifest (key-sorted JSON, no 'signature' field):"
+echo "Canonical trust manifest (key-sorted JSON, no 'signature.jws' member):"
 cat "$payload_file"
 
 # ── Step 7 ─────────────────────────────────────────────────────────────────
@@ -248,7 +250,7 @@ fi
 # ── Step 9 ────────────────────────────────────────────────────────────────
 step "9. Demonstrate tamper detection — modify the payload and re-verify"
 tampered_file="$tmp_root/tampered-trust-manifest.json"
-# Replace the identity value with a different string
+# Replace the contributor value with a different string
 sed 's/urn:demo:agent:trusted-v1/urn:attacker:agent:evil/g' "$payload_file" > "$tampered_file"
 
 echo "Tampered payload:"

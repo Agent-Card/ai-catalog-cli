@@ -41,6 +41,7 @@ pub(crate) fn catalog_of(entries: impl IntoIterator<Item = CatalogEntry>) -> AiC
         host: None,
         entries,
         signature: None,
+        additional_signatures: None,
         extensions: None,
         extra_fields: Default::default(),
     }
