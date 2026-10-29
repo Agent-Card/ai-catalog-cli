@@ -156,7 +156,7 @@ fn write_entry(
             entry.identifier
         )));
     };
-    let verified = verify_subject_digest(entry, served.as_deref())?;
+    let verified = verify_entry_digest(entry, served.as_deref())?;
 
     if output_path == Some("-") {
         std::io::stdout().write_all(&bytes)?;
@@ -182,18 +182,14 @@ fn write_entry(
     Ok(())
 }
 
-/// Check the content against `subject.digest` of the entry's trust manifest.
+/// Check the content against the entry's `digest`.
 ///
 /// For an artifact behind a `url` the digest covers the bytes as served
 /// (`served`); for inline `data` it covers the JCS form of the value. Returns
 /// whether there was a digest to check. This says nothing about who published
 /// the content: signatures are not verified.
-fn verify_subject_digest(entry: &CatalogEntry, served: Option<&[u8]>) -> Result<bool> {
-    let Some(subject) = entry
-        .trust_manifest
-        .as_ref()
-        .and_then(|manifest| manifest.subject.as_ref())
-    else {
+fn verify_entry_digest(entry: &CatalogEntry, served: Option<&[u8]>) -> Result<bool> {
+    let Some(digest) = entry.digest.as_deref() else {
         return Ok(false);
     };
     let canonical;
@@ -207,14 +203,14 @@ fn verify_subject_digest(entry: &CatalogEntry, served: Option<&[u8]>) -> Result<
         (None, Some(bytes)) => bytes,
         (None, None) => return Ok(false),
     };
-    match ai_catalog_trust::verify_digest(&subject.digest, content) {
+    match ai_catalog_trust::verify_digest(digest, content) {
         Ok(true) => Ok(true),
         Ok(false) => Err(Error::Other(format!(
-            "content of \"{}\" does not match its subject.digest {}",
-            entry.identifier, subject.digest
+            "content of \"{}\" does not match its digest {}",
+            entry.identifier, digest
         ))),
         Err(e) => Err(Error::Other(format!(
-            "cannot check subject.digest of \"{}\": {e}",
+            "cannot check digest of \"{}\": {e}",
             entry.identifier
         ))),
     }

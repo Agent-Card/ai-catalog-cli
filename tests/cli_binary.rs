@@ -826,19 +826,12 @@ fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{hex}")
 }
 
-/// A catalog with one entry that carries a trust manifest bound to `digest`.
+/// A catalog with one entry that declares `digest`.
 fn write_bound_catalog(dir: &Path, artifact: &str, digest: &str) -> String {
     let entry = serde_json::json!({
         "identifier": "urn:test:bound",
         "type": "application/json",
-        "trustManifest": {
-            "identity": "did:web:example.com",
-            "subject": {
-                "identifier": "urn:test:bound",
-                "type": "application/json",
-                "digest": digest,
-            }
-        }
+        "digest": digest,
     });
     let mut entry = entry;
     match artifact.strip_prefix("file://") {
@@ -918,5 +911,5 @@ fn pull_refuses_a_weak_digest() {
     let (ok, _, stderr) = pull_bound(&catalog, &out);
 
     assert!(!ok);
-    assert!(stderr.contains("cannot check subject.digest"), "{stderr}");
+    assert!(stderr.contains("cannot check digest"), "{stderr}");
 }

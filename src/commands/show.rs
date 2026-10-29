@@ -121,10 +121,17 @@ fn print_entry_table(found: &ResolvedEntry, cache: &CacheManager) {
             publisher.identifier
         );
     }
-    if let Some(trust) = &entry.trust_manifest {
-        println!("  {}  {}", "Trust identity:".bold(), trust.identity);
-        if trust.signature.is_some() {
-            println!("  {}  present", "Signature:".bold());
+    if let Some(digest) = &entry.digest {
+        println!("  {}  {}", "Digest:".bold(), digest);
+    }
+    for trust in &entry.trust_manifests {
+        println!("  {}  {}", "Trust contributor:".bold(), trust.contributor);
+        if let Some(signature) = &trust.signature {
+            println!(
+                "  {}  present (profile {}, not verified)",
+                "Signature:".bold(),
+                signature.profile
+            );
         }
         if !trust.attestations.is_empty() {
             println!(

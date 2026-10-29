@@ -282,8 +282,8 @@ stdout. Omitting `--output` writes to the current directory.
 
 `--scope` follows the same name-or-URI rules as `show`.
 
-If the entry's trust manifest has a `subject`, the content is checked against
-`subject.digest` first, and a mismatch fails the pull. Signatures are not verified.
+If the entry has a `digest`, the content is checked against it first, and a
+mismatch fails the pull. Signatures are not verified.
 
 When the identifier resolves to a nested catalog entry
 (`application/ai-catalog+json`), `--media-type` is required:
@@ -484,7 +484,7 @@ variants are restricted to OCI-sourced entries. See
 
 When `--cosign-key` is supplied to `oci export-layout` or `oci push`, the CLI:
 
-1. Canonicalizes each entry trust manifest (key-sorted JSON, `signature` field stripped)
+1. Canonicalizes each entry trust manifest (key-sorted JSON, `signature.jws` and `additionalSignatures` stripped)
 2. Signs the canonical blob with `cosign sign-blob`
 3. Attaches three OCI referrer artifacts to each signed entry:
    - the canonical trust manifest (`application/vnd.ai-catalog.trust-manifest.v1+json`)

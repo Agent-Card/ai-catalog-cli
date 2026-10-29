@@ -127,17 +127,18 @@ try {
       "tags": ["agent", "chat", "nlp", "a2a"],
       "url": "https://example.com/agents/conversational-v1.json",
       "version": "1.0.0",
-      "trustManifest": {
-        "identity": "urn:demo:agent:conversational-v1",
-        "identityType": "urn",
-        "attestations": [
-          {
-            "type": "SOC2-Type2",
-            "uri": "https://trust.example.com/reports/soc2-2026.pdf",
-            "digest": "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
-          }
-        ]
-      }
+      "trustManifests": [
+        {
+          "contributor": "urn:demo:agent:conversational-v1",
+          "attestations": [
+            {
+              "type": "SOC2-Type2",
+              "uri": "https://trust.example.com/reports/soc2-2026.pdf",
+              "digest": "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
+            }
+          ]
+        }
+      ]
     },
     {
       "identifier": "urn:demo:model:embeddings-v2",
