@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ai_catalog_discover::{Fetcher, HttpFetcher, Method, discover_with};
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use url::Url;
@@ -70,6 +71,56 @@ pub fn join(base: &str, reference: &str) -> Result<String> {
         })
 }
 
+/// Where the catalog that a user pointed the CLI at actually is.
+#[derive(Debug)]
+pub enum Located {
+    /// A catalog URL, to be fetched.
+    Url(String),
+    /// A catalog that discovery has fetched already.
+    Discovered {
+        url: String,
+        bytes: Vec<u8>,
+        method: Method,
+    },
+}
+
+/// Turn what the user typed into a catalog. Local files and `http://` URLs are used as
+/// they are; an `https://` URL or a bare domain goes through discovery
+/// (<https://ai-catalog.io/spec/#discovery>).
+pub fn locate(input: &str, fetcher: &dyn Fetcher) -> Result<Located> {
+    let input = input.trim();
+    if input.starts_with("file://") || input.starts_with("http://") || Path::new(input).exists() {
+        return Ok(Located::Url(local_path_to_file_url(input)?));
+    }
+    let bare = !input.contains("://");
+    if bare && !looks_like_host(input) {
+        return Ok(Located::Url(local_path_to_file_url(input)?));
+    }
+    match discover_with(fetcher, input) {
+        Ok(found) => Ok(Located::Discovered {
+            url: found.url,
+            bytes: found.bytes,
+            method: found.method,
+        }),
+        Err(e) if bare => Err(Error::Other(format!(
+            "{e}\n  (there is no local file \"{input}\" either)"
+        ))),
+        Err(e) => Err(Error::Other(e.to_string())),
+    }
+}
+
+/// A bare argument is a domain, not a path, when its first segment has a dot or a port.
+fn looks_like_host(input: &str) -> bool {
+    let host = input.split('/').next().unwrap_or("");
+    host.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && (host.contains('.') || host.contains(':') || host == "localhost")
+}
+
+/// The fetcher discovery uses, with the CLI's own client.
+pub fn build_fetcher() -> Result<HttpFetcher> {
+    Ok(HttpFetcher::with_client(build_client()?))
+}
+
 /// Fetch a catalog document, refusing anything over the size limit.
 pub fn fetch_catalog(url: &str, client: &Client) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -117,6 +168,105 @@ mod tests {
             join("https://example.com/a.json", "https://other.example/b.json").unwrap(),
             "https://other.example/b.json"
         );
+    }
+
+    use std::cell::RefCell;
+
+    use ai_catalog_discover::Response;
+
+    const CATALOG: &str = r#"{"specVersion": "1.0", "entries": []}"#;
+
+    /// Serves canned responses, and records the requests.
+    #[derive(Default)]
+    struct Mock {
+        pages: Vec<(&'static str, &'static str, Vec<&'static str>, &'static str)>,
+        requests: RefCell<Vec<String>>,
+    }
+
+    impl Mock {
+        fn page(
+            mut self,
+            url: &'static str,
+            content_type: &'static str,
+            links: &[&'static str],
+            body: &'static str,
+        ) -> Self {
+            self.pages.push((url, content_type, links.to_vec(), body));
+            self
+        }
+    }
+
+    impl Fetcher for Mock {
+        fn get(&self, url: &Url) -> std::result::Result<Response, String> {
+            self.requests.borrow_mut().push(url.to_string());
+            let page = self.pages.iter().find(|p| p.0 == url.as_str());
+            Ok(Response {
+                url: url.clone(),
+                status: if page.is_some() { 200 } else { 404 },
+                content_type: page.map(|p| p.1.to_string()),
+                link_headers: page
+                    .map(|p| p.2.iter().map(|l| l.to_string()).collect())
+                    .unwrap_or_default(),
+                body: page.map(|p| p.3.as_bytes().to_vec()).unwrap_or_default(),
+            })
+        }
+    }
+
+    #[test]
+    fn locate_leaves_files_and_http_urls_alone() {
+        let mock = Mock::default();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("catalog.json");
+        std::fs::write(&path, CATALOG).unwrap();
+
+        for input in [
+            path.to_str().unwrap(),
+            "file:///tmp/catalog.json",
+            "http://localhost:8080/catalog.json",
+        ] {
+            let Located::Url(url) = locate(input, &mock).unwrap() else {
+                panic!("{input} should not be discovered");
+            };
+            assert!(url.contains("://"), "{url}");
+        }
+        assert!(mock.requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn locate_discovers_the_catalog_of_a_bare_domain() {
+        let mock = Mock::default()
+            .page(
+                "https://example.com/",
+                "text/html",
+                &[],
+                r#"<head><link rel="ai-catalog" href="/ai.json"></head>"#,
+            )
+            .page(
+                "https://example.com/ai.json",
+                "application/ai-catalog+json",
+                &[],
+                CATALOG,
+            );
+
+        let Located::Discovered { url, bytes, method } = locate("example.com", &mock).unwrap()
+        else {
+            panic!("expected discovery");
+        };
+
+        assert_eq!(url, "https://example.com/ai.json");
+        assert_eq!(bytes, CATALOG.as_bytes());
+        assert_eq!(method, Method::HtmlLink);
+    }
+
+    #[test]
+    fn locate_keeps_the_error_for_a_mistyped_path() {
+        let mock = Mock::default();
+
+        for input in ["catalogs/missing.json", "./missing.json", "~/missing.json"] {
+            let error = locate(input, &mock).unwrap_err().to_string();
+            assert!(error.contains("cannot resolve path"), "{error}");
+        }
+        assert!(mock.requests.borrow().is_empty());
     }
 
     #[test]
