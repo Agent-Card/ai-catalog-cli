@@ -19,7 +19,7 @@ use ai_catalog::{AiCatalog, parse_file, parse_reader, write_writer};
 use clap::{CommandFactory, Parser};
 
 use ai_catalog_oci::{
-    OciArtifactSet, attach_cosign_verification_artifacts, export_layout, import_layout,
+    OciArtifactSet, attach_cosign_verification_artifacts_with_bundle, export_layout, import_layout,
     pack_catalog, unpack_catalog,
 };
 use ai_catalog_trust::canonicalize_trust_manifest;
@@ -802,14 +802,15 @@ fn attach_cosign_material(
             "sha256:{}",
             digest_hex(Sha256::digest(&canonical_bytes).as_slice())
         );
-        let signature = sign_blob_with_cosign(&canonical_bytes, cosign_key, signing_config)?;
+        let signed = sign_blob_with_cosign(&canonical_bytes, cosign_key, signing_config)?;
 
-        attach_cosign_verification_artifacts(
+        attach_cosign_verification_artifacts_with_bundle(
             artifacts,
             &subject_digest,
             &trust_manifest.contributor,
             &payload_digest,
-            &signature,
+            &signed.signature,
+            Some(&signed.bundle),
             &public_key,
         )
         .map_err(io::Error::other)?;
@@ -889,11 +890,17 @@ fn sigstore_signing_config(services: &[SigstoreService]) -> String {
     .to_string()
 }
 
+/// The detached signature and the Sigstore bundle written by `cosign sign-blob`.
+struct CosignSignedBlob {
+    signature: Vec<u8>,
+    bundle: Vec<u8>,
+}
+
 fn sign_blob_with_cosign(
     payload: &[u8],
     cosign_key: &str,
     signing_config: &SigningConfig,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<CosignSignedBlob> {
     let work_dir = temporary_layout_dir("ai-catalog-cosign");
     let payload_path = work_dir.join("trust-manifest.json");
     let bundle_path = work_dir.join("trust-manifest.bundle.json");
@@ -921,7 +928,10 @@ fn sign_blob_with_cosign(
         let bundle: CosignBlobBundle =
             serde_json::from_slice(&bundle_bytes).map_err(io::Error::other)?;
 
-        Ok(bundle.message_signature.signature.into_bytes())
+        Ok(CosignSignedBlob {
+            signature: bundle.message_signature.signature.into_bytes(),
+            bundle: bundle_bytes,
+        })
     } else {
         Err(command_failure("cosign sign-blob", &output))
     };
@@ -1111,7 +1121,8 @@ fn conformance_level_name(level: ConformanceLevel) -> &'static str {
 mod tests {
     use super::run;
     use ai_catalog_oci::{
-        COSIGN_PUBLIC_KEY_ARTIFACT_TYPE, COSIGN_SIGNATURE_ARTIFACT_TYPE,
+        COSIGN_BUNDLE_LAYER_MEDIA_TYPE, COSIGN_PUBLIC_KEY_ARTIFACT_TYPE,
+        COSIGN_SIGNATURE_ARTIFACT_TYPE, COSIGN_SIGNATURE_LAYER_MEDIA_TYPE,
         TRUST_MANIFEST_ARTIFACT_TYPE, import_layout,
     };
 
@@ -1472,6 +1483,24 @@ mod tests {
         assert!(referrer_types.contains(&TRUST_MANIFEST_ARTIFACT_TYPE));
         assert!(referrer_types.contains(&COSIGN_SIGNATURE_ARTIFACT_TYPE));
         assert!(referrer_types.contains(&COSIGN_PUBLIC_KEY_ARTIFACT_TYPE));
+
+        let signature_layers = imported.referrers[&entry_digest]
+            .iter()
+            .find(|manifest| {
+                manifest.artifact_type.as_deref() == Some(COSIGN_SIGNATURE_ARTIFACT_TYPE)
+            })
+            .expect("signature referrer should exist")
+            .layers
+            .iter()
+            .map(|layer| layer.media_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            signature_layers,
+            [
+                COSIGN_SIGNATURE_LAYER_MEDIA_TYPE,
+                COSIGN_BUNDLE_LAYER_MEDIA_TYPE
+            ]
+        );
 
         fs::remove_dir_all(layout_dir).expect("layout dir should be removable");
         fs::remove_dir_all(tool_dir).expect("tool dir should be removable");
