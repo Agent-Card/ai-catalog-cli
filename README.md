@@ -134,7 +134,8 @@ Use `-` as `<path>` to read from stdin. Every command accepts `--help`.
 ### `validate`
 
 Validates a catalog document against the AI Catalog specification and reports
-the conformance level (Minimal / Discoverable / Trusted).
+its structural conformance level (Minimal or Discoverable). The Trusted level
+requires verifying signatures and artifacts; use [`verify`](#verify) for that.
 
 ```sh
 ai-catalog validate catalog.json          # text report
