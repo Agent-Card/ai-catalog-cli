@@ -1886,9 +1886,9 @@ mod tests {
         did_document: Option<&str>,
         extra: &[&str],
     ) -> (i32, String, String) {
-        let dir = unique_temp_dir("ai-catalog-cli-verify");
-        fs::create_dir_all(&dir).expect("dir");
-        let document_path = dir.join("did.json");
+        // A fresh directory per call: tests run in parallel, and time-based names can collide.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let document_path = dir.path().join("did.json");
         let mut args = vec![
             "ai-catalog-cli".to_owned(),
             "verify".to_owned(),
@@ -1901,9 +1901,7 @@ mod tests {
         }
         args.extend(extra.iter().map(|arg| (*arg).to_owned()));
         args.push("-".to_owned());
-        let result = run_command(args.iter().map(String::as_str), catalog);
-        fs::remove_dir_all(&dir).expect("dir removable");
-        result
+        run_command(args.iter().map(String::as_str), catalog)
     }
 
     #[test]
@@ -1959,16 +1957,14 @@ mod tests {
     #[test]
     fn verify_rejects_a_non_root_did_document_override() {
         let (catalog, document) = signed_verify_fixture(|_| {});
-        let dir = unique_temp_dir("ai-catalog-cli-verify-bad-did");
-        fs::create_dir_all(&dir).expect("dir");
-        let path = dir.join("did.json");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("did.json");
         fs::write(&path, document).expect("write");
         let spec = format!("did:web:example.com:users:alice={}", path.display());
         let (exit_code, _, stderr) = run_command(
             ["ai-catalog-cli", "verify", "--did-document", &spec, "-"],
             &catalog,
         );
-        fs::remove_dir_all(&dir).expect("dir removable");
 
         assert_eq!(exit_code, 2);
         assert!(stderr.contains("root did:web"), "{stderr}");
