@@ -1,7 +1,7 @@
 // Copyright AI-Catalog Contributors (https://github.com/Agent-Card/ai-catalog-cli)
 // SPDX-License-Identifier: Apache-2.0
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// Inspect, validate, publish and consume AI Catalog documents.
 ///
@@ -160,10 +160,28 @@ pub struct PublishArgs {
     /// Public key to attach next to the signatures (defaults to the one for --cosign-key)
     #[arg(long, requires = "cosign_key")]
     pub cosign_public_key: Option<String>,
-    /// Record each signature in the public Rekor transparency log. Entries are permanent
-    /// and public; without this flag, signatures are not uploaded to any log.
-    #[arg(long, requires = "cosign_key")]
-    pub tlog_upload: bool,
+    /// Public Sigstore services to record signatures with, comma-separated. Without this
+    /// option or --signing-config, signing uses no Sigstore service.
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        requires = "cosign_key",
+        conflicts_with = "signing_config"
+    )]
+    pub sigstore_services: Vec<SigstoreService>,
+    /// Cosign signing config to sign with instead, for example a private Sigstore deployment
+    #[arg(long, value_name = "PATH", requires = "cosign_key")]
+    pub signing_config: Option<String>,
+}
+
+/// A public Sigstore service that `cosign sign-blob` can record a signature with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SigstoreService {
+    /// Record each signature in the public Rekor transparency log (permanent and public)
+    Tlog,
+    /// Get an RFC 3161 timestamp from the Sigstore timestamp authority (sends only a hash)
+    Tsa,
 }
 
 #[derive(Debug, Args)]

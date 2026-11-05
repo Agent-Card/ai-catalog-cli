@@ -109,9 +109,9 @@ ai-catalog validate [--json] <path|->
 ai-catalog format <path|->
 ai-catalog oci pack <path|->
 ai-catalog oci unpack <path|->
-ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] [--tlog-upload] <path|-> <layout-dir>
+ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] [--sigstore-services <tlog,tsa>] [--signing-config <path>] <path|-> <layout-dir>
 ai-catalog oci unpack-layout [--ref-name <name>] <layout-dir>
-ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] [--tlog-upload] <path|-> <target>
+ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] [--sigstore-services <tlog,tsa>] [--signing-config <path>] <path|-> <target>
 ai-catalog oci add <name> <layout-dir> [--ref-name <tag>]
 ai-catalog oci search [--regex] [-n <limit>] [--json] <keyword>
 ai-catalog oci show [--json] [--media-type <type>] <identifier>
@@ -348,7 +348,8 @@ ai-catalog oci export-layout \
 | `--tag <tag>` | OCI tag to apply (default: `latest`) |
 | `--cosign-key <path>` | Path to Cosign private key; triggers signing of trust manifests |
 | `--cosign-public-key <path>` | Path to PEM public key (derived from `--cosign-key` if omitted) |
-| `--tlog-upload` | Also record each signature in the public Rekor transparency log (off by default) |
+| `--sigstore-services <list>` | Public Sigstore services to sign with, comma-separated: `tlog` (Rekor transparency log), `tsa` (RFC 3161 timestamp). Default: none |
+| `--signing-config <path>` | Cosign signing config to use instead, for example a private Sigstore deployment |
 
 Reads from stdin when `<path>` is `-`.
 
@@ -397,7 +398,8 @@ ai-catalog oci push \
 | `--to-oci-layout-path <dir>` | Also write the exported layout to this directory |
 | `--cosign-key <path>` | Path to Cosign private key |
 | `--cosign-public-key <path>` | Path to PEM public key |
-| `--tlog-upload` | Also record each signature in the public Rekor transparency log (off by default) |
+| `--sigstore-services <list>` | Public Sigstore services to sign with, comma-separated: `tlog` (Rekor transparency log), `tsa` (RFC 3161 timestamp). Default: none |
+| `--signing-config <path>` | Cosign signing config to use instead, for example a private Sigstore deployment |
 
 Reads from stdin when `<path>` is `-`. Requires `oras` on `PATH`.
 
@@ -487,10 +489,13 @@ variants are restricted to OCI-sourced entries. See
 When `--cosign-key` is supplied to `oci export-layout` or `oci push`, the CLI:
 
 1. Canonicalizes each entry trust manifest (key-sorted JSON, `signature.jws` and `additionalSignatures` stripped)
-2. Signs the canonical blob with `cosign sign-blob`, passing an empty Sigstore signing
-   config so the signature is not uploaded to a transparency log. With `--tlog-upload`,
-   Cosign's default signing config is used instead and each signature becomes a
-   permanent, public entry in the Rekor log.
+2. Signs the canonical blob with `cosign sign-blob` and a Sigstore signing config that
+   lists only the services you choose. By default it lists none, so nothing leaves the
+   machine. `--sigstore-services tlog` records each signature in the public Rekor log
+   (permanent and public); `--sigstore-services tsa` adds an RFC 3161 timestamp from the
+   Sigstore timestamp authority, which receives only a hash. `--signing-config <path>`
+   passes your own config, for example a private Rekor or timestamp authority.
+   Timestamps are kept in the Cosign bundle, which the layout does not store yet.
 3. Attaches three OCI referrer artifacts to each signed entry:
    - the canonical trust manifest (`application/vnd.ai-catalog.trust-manifest.v1+json`)
    - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`)
