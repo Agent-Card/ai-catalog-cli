@@ -8,6 +8,7 @@ pub mod commands;
 pub mod error;
 pub mod fetch;
 pub mod resolver;
+pub mod verify;
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -90,6 +91,13 @@ where
     match command {
         Command::Validate { path, json } => validate_command(&path, json, &mut io),
         Command::Format { path } => format_command(&path, &mut io),
+        Command::Verify {
+            path,
+            json,
+            did_documents,
+            offline,
+            strict,
+        } => verify_command(&path, json, &did_documents, offline, strict, &mut io),
         Command::Oci { command } => oci_command(command, &mut io),
         Command::Catalog { command } => {
             let result = match command {
@@ -582,6 +590,120 @@ fn push_artifacts_via_oras(
 
         Ok(output.status.code().unwrap_or(1))
     }
+}
+
+fn verify_command(
+    path: &str,
+    json: bool,
+    did_documents: &[String],
+    offline: bool,
+    strict: bool,
+    io: &mut Io,
+) -> io::Result<i32> {
+    let catalog = match read_catalog(path, io.stdin) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            writeln!(io.err, "{}", parse_error_message(path, &error))?;
+            return Ok(1);
+        }
+    };
+
+    let mut documents = std::collections::BTreeMap::new();
+    for spec in did_documents {
+        let Some((did, file)) = spec.split_once('=') else {
+            writeln!(io.err, "--did-document must be DID=PATH, found '{spec}'")?;
+            return Ok(2);
+        };
+        let document = fs::read(file)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| ai_catalog_trust::parse_json(bytes).map_err(|e| e.to_string()));
+        match document {
+            Ok(document) => {
+                documents.insert(did.to_owned(), document);
+            }
+            Err(error) => {
+                writeln!(io.err, "failed to read DID document '{file}': {error}")?;
+                return Ok(2);
+            }
+        }
+    }
+
+    let validation = validate(&catalog);
+    let resolver = verify::DidWebResolver { documents, offline };
+    let reports = verify::verify_catalog(&catalog, &resolver, chrono::Utc::now());
+
+    let outcomes = reports
+        .iter()
+        .flat_map(|entry| &entry.manifests)
+        .map(|m| m.outcome);
+    let failed = !validation.is_valid
+        || outcomes
+            .clone()
+            .any(|outcome| outcome == verify::Outcome::Failed)
+        || reports
+            .iter()
+            .filter_map(|entry| entry.artifact.as_ref())
+            .any(|check| check.passed == Some(false));
+    let inconclusive = outcomes
+        .clone()
+        .any(|outcome| outcome == verify::Outcome::Inconclusive);
+
+    if json {
+        let report = serde_json::json!({
+            "valid": validation.is_valid,
+            "errors": validation.errors.iter().map(|d| d.message.clone()).collect::<Vec<_>>(),
+            "entries": reports,
+        });
+        writeln!(
+            io.out,
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(io::Error::other)?
+        )?;
+    } else {
+        if !validation.is_valid {
+            writeln!(io.err, "catalog is invalid")?;
+            write_diagnostics(&mut io.err, "errors", &validation.errors)?;
+        }
+        for entry in &reports {
+            writeln!(io.out, "{} ({})", entry.identifier, entry.path)?;
+            if let Some(check) = &entry.artifact {
+                writeln!(io.out, "  artifact: {}", check_line(check))?;
+            }
+            if entry.manifests.is_empty() {
+                writeln!(io.out, "  no trust manifests")?;
+            }
+            for manifest in &entry.manifests {
+                let role = match manifest.publisher_authority {
+                    Some(true) => ", publisher",
+                    Some(false) => ", not the publisher",
+                    None => "",
+                };
+                let outcome = serde_json::to_value(manifest.outcome)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                writeln!(io.out, "  {}{role}: {outcome}", manifest.contributor)?;
+                for check in &manifest.checks {
+                    writeln!(io.out, "    {}", check_line(check))?;
+                }
+            }
+        }
+    }
+
+    Ok(if failed || (strict && inconclusive) {
+        1
+    } else {
+        0
+    })
+}
+
+fn check_line(check: &verify::Check) -> String {
+    let mark = match check.passed {
+        Some(true) => "ok",
+        Some(false) => "FAIL",
+        None => "??",
+    };
+    format!("[{mark}] {}: {}", check.code, check.message)
 }
 
 fn read_catalog(path: &str, stdin: &mut dyn Read) -> ai_catalog::Result<ai_catalog::AiCatalog> {

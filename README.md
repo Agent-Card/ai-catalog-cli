@@ -106,6 +106,7 @@ This CLI builds on the four AI Catalog library crates, released separately from
 
 ```
 ai-catalog validate [--json] <path|->
+ai-catalog verify [--json] [--did-document <DID=PATH>]... [--offline] [--strict] <path|->
 ai-catalog format <path|->
 ai-catalog oci pack <path|->
 ai-catalog oci unpack <path|->
@@ -146,6 +147,39 @@ Exits with code `0` on success, `1` on validation errors.
 With `--json`, each error and warning has a stable `code` (for example
 `entry-duplicate`) next to its `path` and `message`. Match on the code rather
 than the message. `code` is `null` when the input could not be parsed.
+
+---
+
+### `verify`
+
+Verifies the trust manifests of each root entry and reports a result per manifest.
+
+```sh
+ai-catalog verify catalog.json
+ai-catalog verify --json catalog.json
+ai-catalog verify --offline --did-document did:web:example.com=did.json catalog.json
+```
+
+For each trust manifest it checks:
+
+- **Release binding:** `subject` matches the entry's `identifier`, `type`, `digest`, and `version`.
+- **Signature object:** `signature.signer` equals `contributor`; `issuedAt` / `expiresAt` hold now.
+- **`did-web-v1` signature:** the signer is a root `did:web` DID; the protected header has
+  `alg` ES256, `typ` `ai-catalog-trust-manifest+jws`, and a `kid` under the signer; the key
+  is the single matching `assertionMethod` P-256 key in the signer's DID document; and the
+  detached JWS verifies over the manifest's JCS payload.
+- **Publisher authority:** for `urn:air` entries, whether the signer is `did:web:<publisher>`.
+
+It also checks inline `data` against the entry `digest`. Use `pull` to check a `url` artifact.
+
+DID documents are fetched from `https://<domain>/.well-known/did.json` over HTTPS only, without
+redirects, with size and time limits, and refusing private, loopback, and link-local addresses.
+`--did-document DID=PATH` supplies a document locally, and `--offline` never fetches.
+
+Each manifest is `verified`, `failed`, `inconclusive` (a check could not run, for example an
+unsupported profile or a missing DID document offline), or `unsigned`. Exits with `1` when
+the catalog is invalid or any check fails; with `--strict`, also when a signed manifest is
+inconclusive.
 
 ---
 
