@@ -383,6 +383,7 @@ fn pack(publish: &PublishArgs, io: &mut Io) -> io::Result<Option<OciArtifactSet>
                 "note: each signature is recorded in the public Rekor transparency log; entries are permanent"
             )?;
         }
+        // Temporary: remove this note once the layout stores Cosign bundles (#64, #66).
         if services.contains(&SigstoreService::Tsa) {
             writeln!(
                 io.err,
