@@ -60,21 +60,27 @@ pub fn did_document_url(did: &str) -> Result<String, String> {
     }
 }
 
-/// Fetches a URL under the safe-fetching rules: HTTPS only, no redirects, a
-/// size and time limit, and no private, loopback, or link-local addresses. The
-/// checked addresses are pinned so the connection cannot be re-resolved elsewhere.
-fn fetch(url: &str) -> Result<Vec<u8>, String> {
+/// Parses `url` and checks it may be fetched: `https`, with a domain name host.
+fn checked_target(url: &str) -> Result<Url, String> {
     let parsed = Url::parse(url).map_err(|error| format!("invalid URL {url}: {error}"))?;
     if parsed.scheme() != "https" {
         return Err(format!("refusing non-https URL {url}"));
     }
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| format!("URL {url} has no host"))?;
-    if host.parse::<IpAddr>().is_ok() || host.starts_with('[') {
-        return Err(format!("refusing IP address host in {url}"));
+    match parsed.host() {
+        Some(url::Host::Domain(_)) => Ok(parsed),
+        Some(_) => Err(format!("refusing IP address host in {url}")),
+        None => Err(format!("URL {url} has no host")),
     }
-    let port = parsed.port_or_known_default().unwrap_or(443);
+}
+
+/// Fetches a URL under the safe-fetching rules: HTTPS only, no redirects, a
+/// size and time limit, and no private, loopback, or link-local addresses. The
+/// checked addresses are pinned so the connection cannot be re-resolved elsewhere.
+fn fetch(url: &str) -> Result<Vec<u8>, String> {
+    let target = checked_target(url)?;
+    let host = target.host_str().unwrap_or_default().to_owned();
+    let host = host.as_str();
+    let port = target.port_or_known_default().unwrap_or(443);
     let addresses: Vec<SocketAddr> = (host, port)
         .to_socket_addrs()
         .map_err(|error| format!("cannot resolve {host}: {error}"))?
@@ -97,7 +103,7 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
         .build()
         .map_err(|error| error.to_string())?;
     let response = client
-        .get(url)
+        .get(target)
         .send()
         .map_err(|error| format!("cannot fetch {url}: {error}"))?;
     if !response.status().is_success() {
@@ -303,9 +309,11 @@ mod tests {
             "https://127.0.0.1/did.json",
             "https://[::1]/did.json",
             "file:///etc/passwd",
+            "not a url",
         ] {
-            assert!(fetch(url).is_err(), "{url} should be refused");
+            assert!(checked_target(url).is_err(), "{url} should be refused");
         }
+        assert!(checked_target("https://example.com/.well-known/did.json").is_ok());
     }
 
     #[test]
