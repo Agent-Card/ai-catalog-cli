@@ -152,7 +152,8 @@ than the message. `code` is `null` when the input could not be parsed.
 
 ### `verify`
 
-Verifies the trust manifests of each root entry and reports a result per manifest.
+Validates a catalog and verifies the signatures and artifacts of its root entries, using
+`ai_catalog_validate::verify`.
 
 ```sh
 ai-catalog verify catalog.json
@@ -160,26 +161,20 @@ ai-catalog verify --json catalog.json
 ai-catalog verify --offline --did-document did:web:example.com=did.json catalog.json
 ```
 
-For each trust manifest it checks:
+For each trust manifest it reports the `did-web-v1` signature (signer, protected header,
+`assertionMethod` key in the signer's root `did:web` document, validity period, and the
+detached ES256 JWS) and the release binding of its `subject` to the entry. For each entry it
+reports whether the publisher endorsed it and, once a manifest is accepted, whether the
+artifact matches `digest`. The catalog's conformance level is Trusted only when an entry has a
+verified publisher endorsement and none fails.
 
-- **Release binding:** `subject` matches the entry's `identifier`, `type`, `digest`, and `version`.
-- **Signature object:** `signature.signer` equals `contributor`; `issuedAt` / `expiresAt` hold now.
-- **`did-web-v1` signature:** the signer is a root `did:web` DID; the protected header has
-  `alg` ES256, `typ` `ai-catalog-trust-manifest+jws`, and a `kid` under the signer; the key
-  is the single matching `assertionMethod` P-256 key in the signer's DID document; and the
-  detached JWS verifies over the manifest's JCS payload.
-- **Publisher authority:** for `urn:air` entries, whether the signer is `did:web:<publisher>`.
+DID documents and artifacts are fetched over HTTPS only, without redirects, with size and time
+limits, and refusing private, loopback, and link-local addresses. `--did-document DID=PATH`
+supplies a DID document locally, and `--offline` never fetches.
 
-It also checks inline `data` against the entry `digest`. Use `pull` to check a `url` artifact.
-
-DID documents are fetched from `https://<domain>/.well-known/did.json` over HTTPS only, without
-redirects, with size and time limits, and refusing private, loopback, and link-local addresses.
-`--did-document DID=PATH` supplies a document locally, and `--offline` never fetches.
-
-Each manifest is `verified`, `failed`, `inconclusive` (a check could not run, for example an
-unsupported profile or a missing DID document offline), or `unsigned`. Exits with `1` when
-the catalog is invalid or any check fails; with `--strict`, also when a signed manifest is
-inconclusive.
+Each check is `verified`, `failed`, or `unverifiable` (it could not run, for example a fetch
+skipped with `--offline`). Exits with `1` when the catalog is invalid or any check fails; with
+`--strict`, also when a check is unverifiable.
 
 ---
 
