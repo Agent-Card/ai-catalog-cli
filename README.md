@@ -525,7 +525,7 @@ When `--cosign-key` is supplied to `oci export-layout` or `oci push`, the CLI:
    (permanent and public); `--sigstore-services tsa` adds an RFC 3161 timestamp from the
    Sigstore timestamp authority, which receives only a hash. `--signing-config <path>`
    passes your own config, for example a private Rekor or timestamp authority.
-   Timestamps are kept in the Cosign bundle, which the layout does not store yet.
+   Log entries and timestamps are kept in the Cosign bundle stored with each signature.
 3. Attaches three OCI referrer artifacts to each signed entry:
    - the canonical trust manifest (`application/vnd.ai-catalog.trust-manifest.v1+json`)
    - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`), with the

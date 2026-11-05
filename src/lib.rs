@@ -391,13 +391,6 @@ fn pack(publish: &PublishArgs, io: &mut Io) -> io::Result<Option<OciArtifactSet>
                 "note: each signature is recorded in the public Rekor transparency log; entries are permanent"
             )?;
         }
-        // Temporary: remove this note once the layout stores Cosign bundles (#64, #66).
-        if services.contains(&SigstoreService::Tsa) {
-            writeln!(
-                io.err,
-                "note: timestamps are kept in the Cosign bundle, which the layout does not store yet"
-            )?;
-        }
         let signing_config = match &publish.signing_config {
             Some(path) => SigningConfig::File(path.clone()),
             None => SigningConfig::Generated(sigstore_signing_config(services)),
