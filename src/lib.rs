@@ -376,11 +376,18 @@ fn pack(publish: &PublishArgs, io: &mut Io) -> io::Result<Option<OciArtifactSet>
     };
 
     if let Some(cosign_key) = &publish.cosign_key {
+        if publish.tlog_upload {
+            writeln!(
+                io.err,
+                "note: --tlog-upload records each signature in the public Rekor transparency log; entries are permanent"
+            )?;
+        }
         match attach_cosign_material(
             &catalog,
             &mut artifacts,
             cosign_key,
             publish.cosign_public_key.as_deref(),
+            publish.tlog_upload,
         ) {
             Ok(attached) => {
                 if attached > 0 {
@@ -672,6 +679,7 @@ fn attach_cosign_material(
     artifacts: &mut OciArtifactSet,
     cosign_key: &str,
     cosign_public_key: Option<&str>,
+    tlog_upload: bool,
 ) -> io::Result<usize> {
     let targets = catalog
         .entries
@@ -699,7 +707,7 @@ fn attach_cosign_material(
             "sha256:{}",
             digest_hex(Sha256::digest(&canonical_bytes).as_slice())
         );
-        let signature = sign_blob_with_cosign(&canonical_bytes, cosign_key)?;
+        let signature = sign_blob_with_cosign(&canonical_bytes, cosign_key, tlog_upload)?;
 
         attach_cosign_verification_artifacts(
             artifacts,
@@ -737,15 +745,30 @@ fn load_cosign_public_key(
     }
 }
 
-fn sign_blob_with_cosign(payload: &[u8], cosign_key: &str) -> io::Result<Vec<u8>> {
+/// Sigstore signing config with no certificate authority, transparency log, or
+/// timestamp authority, so `cosign sign-blob --key` uploads nothing to Sigstore.
+const OFFLINE_SIGNING_CONFIG: &str = r#"{"mediaType":"application/vnd.dev.sigstore.signingconfig.v0.2+json","caUrls":[],"oidcUrls":[],"rekorTlogUrls":[],"tsaUrls":[],"rekorTlogConfig":{"selector":"ANY"},"tsaConfig":{"selector":"ANY"}}"#;
+
+fn sign_blob_with_cosign(
+    payload: &[u8],
+    cosign_key: &str,
+    tlog_upload: bool,
+) -> io::Result<Vec<u8>> {
     let work_dir = temporary_layout_dir("ai-catalog-cosign");
     let payload_path = work_dir.join("trust-manifest.json");
     let bundle_path = work_dir.join("trust-manifest.bundle.json");
+    let signing_config_path = work_dir.join("signing-config.json");
 
     fs::create_dir_all(&work_dir)?;
     fs::write(&payload_path, payload)?;
+    let signing_config = if tlog_upload {
+        None
+    } else {
+        fs::write(&signing_config_path, OFFLINE_SIGNING_CONFIG)?;
+        Some(signing_config_path.as_path())
+    };
 
-    let args = build_cosign_sign_blob_args(cosign_key, &payload_path, &bundle_path);
+    let args = build_cosign_sign_blob_args(cosign_key, &payload_path, &bundle_path, signing_config);
     let output = execute_cosign(&args)?;
     let result = if output.status.success() {
         let bundle_bytes = fs::read(&bundle_path)?;
@@ -765,16 +788,22 @@ fn build_cosign_sign_blob_args(
     cosign_key: &str,
     payload_path: &Path,
     bundle_path: &Path,
+    signing_config: Option<&Path>,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "sign-blob".to_owned(),
         "--yes".to_owned(),
         "--key".to_owned(),
         cosign_key.to_owned(),
         "--bundle".to_owned(),
         bundle_path.display().to_string(),
-        payload_path.display().to_string(),
-    ]
+    ];
+    if let Some(path) = signing_config {
+        args.push("--signing-config".to_owned());
+        args.push(path.display().to_string());
+    }
+    args.push(payload_path.display().to_string());
+    args
 }
 
 fn build_cosign_public_key_args(cosign_key: &str) -> Vec<String> {
@@ -1401,6 +1430,7 @@ mod tests {
             "cosign.key",
             Path::new("/tmp/trust-manifest.json"),
             Path::new("/tmp/trust-manifest.sig"),
+            None,
         );
 
         assert_eq!(
@@ -1415,6 +1445,41 @@ mod tests {
                 "/tmp/trust-manifest.json",
             ]
         );
+    }
+
+    #[test]
+    fn builds_offline_cosign_sign_blob_arguments() {
+        let args = super::build_cosign_sign_blob_args(
+            "cosign.key",
+            Path::new("/tmp/trust-manifest.json"),
+            Path::new("/tmp/trust-manifest.sig"),
+            Some(Path::new("/tmp/signing-config.json")),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "sign-blob",
+                "--yes",
+                "--key",
+                "cosign.key",
+                "--bundle",
+                "/tmp/trust-manifest.sig",
+                "--signing-config",
+                "/tmp/signing-config.json",
+                "/tmp/trust-manifest.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn offline_signing_config_lists_no_services() {
+        let config: serde_json::Value =
+            serde_json::from_str(super::OFFLINE_SIGNING_CONFIG).expect("config should be JSON");
+
+        for key in ["caUrls", "oidcUrls", "rekorTlogUrls", "tsaUrls"] {
+            assert_eq!(config[key], serde_json::json!([]), "{key} should be empty");
+        }
     }
 
     #[test]

@@ -109,9 +109,9 @@ ai-catalog validate [--json] <path|->
 ai-catalog format <path|->
 ai-catalog oci pack <path|->
 ai-catalog oci unpack <path|->
-ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <layout-dir>
+ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] [--tlog-upload] <path|-> <layout-dir>
 ai-catalog oci unpack-layout [--ref-name <name>] <layout-dir>
-ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <target>
+ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] [--tlog-upload] <path|-> <target>
 ai-catalog oci add <name> <layout-dir> [--ref-name <tag>]
 ai-catalog oci search [--regex] [-n <limit>] [--json] <keyword>
 ai-catalog oci show [--json] [--media-type <type>] <identifier>
@@ -348,6 +348,7 @@ ai-catalog oci export-layout \
 | `--tag <tag>` | OCI tag to apply (default: `latest`) |
 | `--cosign-key <path>` | Path to Cosign private key; triggers signing of trust manifests |
 | `--cosign-public-key <path>` | Path to PEM public key (derived from `--cosign-key` if omitted) |
+| `--tlog-upload` | Also record each signature in the public Rekor transparency log (off by default) |
 
 Reads from stdin when `<path>` is `-`.
 
@@ -396,6 +397,7 @@ ai-catalog oci push \
 | `--to-oci-layout-path <dir>` | Also write the exported layout to this directory |
 | `--cosign-key <path>` | Path to Cosign private key |
 | `--cosign-public-key <path>` | Path to PEM public key |
+| `--tlog-upload` | Also record each signature in the public Rekor transparency log (off by default) |
 
 Reads from stdin when `<path>` is `-`. Requires `oras` on `PATH`.
 
@@ -485,7 +487,10 @@ variants are restricted to OCI-sourced entries. See
 When `--cosign-key` is supplied to `oci export-layout` or `oci push`, the CLI:
 
 1. Canonicalizes each entry trust manifest (key-sorted JSON, `signature.jws` and `additionalSignatures` stripped)
-2. Signs the canonical blob with `cosign sign-blob`
+2. Signs the canonical blob with `cosign sign-blob`, passing an empty Sigstore signing
+   config so the signature is not uploaded to a transparency log. With `--tlog-upload`,
+   Cosign's default signing config is used instead and each signature becomes a
+   permanent, public entry in the Rekor log.
 3. Attaches three OCI referrer artifacts to each signed entry:
    - the canonical trust manifest (`application/vnd.ai-catalog.trust-manifest.v1+json`)
    - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`)

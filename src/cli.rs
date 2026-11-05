@@ -160,6 +160,10 @@ pub struct PublishArgs {
     /// Public key to attach next to the signatures (defaults to the one for --cosign-key)
     #[arg(long, requires = "cosign_key")]
     pub cosign_public_key: Option<String>,
+    /// Record each signature in the public Rekor transparency log. Entries are permanent
+    /// and public; without this flag, signatures are not uploaded to any log.
+    #[arg(long, requires = "cosign_key")]
+    pub tlog_upload: bool,
 }
 
 #[derive(Debug, Args)]
