@@ -23,7 +23,7 @@ use ai_catalog_oci::{
 };
 use ai_catalog_trust::canonicalize_trust_manifest;
 use ai_catalog_validate::{ConformanceLevel, Diagnostic, validate};
-use cli::{CatalogCommand, Cli, Command, OciCommand, PublishArgs, SearchArgs};
+use cli::{CatalogCommand, Cli, Command, OciCommand, PublishArgs, SearchArgs, SigstoreService};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
@@ -376,11 +376,30 @@ fn pack(publish: &PublishArgs, io: &mut Io) -> io::Result<Option<OciArtifactSet>
     };
 
     if let Some(cosign_key) = &publish.cosign_key {
+        let services = &publish.sigstore_services;
+        if services.contains(&SigstoreService::Tlog) {
+            writeln!(
+                io.err,
+                "note: each signature is recorded in the public Rekor transparency log; entries are permanent"
+            )?;
+        }
+        // Temporary: remove this note once the layout stores Cosign bundles (#64, #66).
+        if services.contains(&SigstoreService::Tsa) {
+            writeln!(
+                io.err,
+                "note: timestamps are kept in the Cosign bundle, which the layout does not store yet"
+            )?;
+        }
+        let signing_config = match &publish.signing_config {
+            Some(path) => SigningConfig::File(path.clone()),
+            None => SigningConfig::Generated(sigstore_signing_config(services)),
+        };
         match attach_cosign_material(
             &catalog,
             &mut artifacts,
             cosign_key,
             publish.cosign_public_key.as_deref(),
+            &signing_config,
         ) {
             Ok(attached) => {
                 if attached > 0 {
@@ -672,6 +691,7 @@ fn attach_cosign_material(
     artifacts: &mut OciArtifactSet,
     cosign_key: &str,
     cosign_public_key: Option<&str>,
+    signing_config: &SigningConfig,
 ) -> io::Result<usize> {
     let targets = catalog
         .entries
@@ -699,7 +719,7 @@ fn attach_cosign_material(
             "sha256:{}",
             digest_hex(Sha256::digest(&canonical_bytes).as_slice())
         );
-        let signature = sign_blob_with_cosign(&canonical_bytes, cosign_key)?;
+        let signature = sign_blob_with_cosign(&canonical_bytes, cosign_key, signing_config)?;
 
         attach_cosign_verification_artifacts(
             artifacts,
@@ -737,15 +757,81 @@ fn load_cosign_public_key(
     }
 }
 
-fn sign_blob_with_cosign(payload: &[u8], cosign_key: &str) -> io::Result<Vec<u8>> {
+/// The Sigstore signing config `cosign sign-blob` signs with.
+enum SigningConfig {
+    /// Generated from `--sigstore-services`.
+    Generated(String),
+    /// Given with `--signing-config`.
+    File(String),
+}
+
+// Public Sigstore endpoints, as listed in the `signing_config.v0.2.json` target of the
+// Sigstore TUF repository (github.com/sigstore/root-signing).
+const SIGSTORE_REKOR_URL: &str = "https://rekor.sigstore.dev";
+const SIGSTORE_REKOR_VALID_FROM: &str = "2021-01-12T11:53:27.000Z";
+const SIGSTORE_TSA_URL: &str = "https://timestamp.sigstore.dev/api/v1/timestamp";
+const SIGSTORE_TSA_VALID_FROM: &str = "2025-07-04T00:00:00Z";
+
+/// A signing config that uses only the selected public Sigstore services. Certificate
+/// authorities are never listed, since signing always uses `--key`.
+fn sigstore_signing_config(services: &[SigstoreService]) -> String {
+    let service = |url: &str, valid_from: &str| {
+        serde_json::json!({
+            "url": url,
+            "majorApiVersion": 1,
+            "validFor": { "start": valid_from },
+            "operator": "sigstore.dev",
+        })
+    };
+    let rekor = if services.contains(&SigstoreService::Tlog) {
+        vec![service(SIGSTORE_REKOR_URL, SIGSTORE_REKOR_VALID_FROM)]
+    } else {
+        Vec::new()
+    };
+    let tsa = if services.contains(&SigstoreService::Tsa) {
+        vec![service(SIGSTORE_TSA_URL, SIGSTORE_TSA_VALID_FROM)]
+    } else {
+        Vec::new()
+    };
+
+    serde_json::json!({
+        "mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+        "caUrls": [],
+        "oidcUrls": [],
+        "rekorTlogUrls": rekor,
+        "tsaUrls": tsa,
+        "rekorTlogConfig": { "selector": "ANY" },
+        "tsaConfig": { "selector": "ANY" },
+    })
+    .to_string()
+}
+
+fn sign_blob_with_cosign(
+    payload: &[u8],
+    cosign_key: &str,
+    signing_config: &SigningConfig,
+) -> io::Result<Vec<u8>> {
     let work_dir = temporary_layout_dir("ai-catalog-cosign");
     let payload_path = work_dir.join("trust-manifest.json");
     let bundle_path = work_dir.join("trust-manifest.bundle.json");
+    let generated_config_path = work_dir.join("signing-config.json");
 
     fs::create_dir_all(&work_dir)?;
     fs::write(&payload_path, payload)?;
+    let signing_config_path = match signing_config {
+        SigningConfig::Generated(config) => {
+            fs::write(&generated_config_path, config)?;
+            generated_config_path.clone()
+        }
+        SigningConfig::File(path) => PathBuf::from(path),
+    };
 
-    let args = build_cosign_sign_blob_args(cosign_key, &payload_path, &bundle_path);
+    let args = build_cosign_sign_blob_args(
+        cosign_key,
+        &payload_path,
+        &bundle_path,
+        Some(&signing_config_path),
+    );
     let output = execute_cosign(&args)?;
     let result = if output.status.success() {
         let bundle_bytes = fs::read(&bundle_path)?;
@@ -765,16 +851,22 @@ fn build_cosign_sign_blob_args(
     cosign_key: &str,
     payload_path: &Path,
     bundle_path: &Path,
+    signing_config: Option<&Path>,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "sign-blob".to_owned(),
         "--yes".to_owned(),
         "--key".to_owned(),
         cosign_key.to_owned(),
         "--bundle".to_owned(),
         bundle_path.display().to_string(),
-        payload_path.display().to_string(),
-    ]
+    ];
+    if let Some(path) = signing_config {
+        args.push("--signing-config".to_owned());
+        args.push(path.display().to_string());
+    }
+    args.push(payload_path.display().to_string());
+    args
 }
 
 fn build_cosign_public_key_args(cosign_key: &str) -> Vec<String> {
@@ -1401,6 +1493,7 @@ mod tests {
             "cosign.key",
             Path::new("/tmp/trust-manifest.json"),
             Path::new("/tmp/trust-manifest.sig"),
+            None,
         );
 
         assert_eq!(
@@ -1415,6 +1508,118 @@ mod tests {
                 "/tmp/trust-manifest.json",
             ]
         );
+    }
+
+    #[test]
+    fn builds_offline_cosign_sign_blob_arguments() {
+        let args = super::build_cosign_sign_blob_args(
+            "cosign.key",
+            Path::new("/tmp/trust-manifest.json"),
+            Path::new("/tmp/trust-manifest.sig"),
+            Some(Path::new("/tmp/signing-config.json")),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "sign-blob",
+                "--yes",
+                "--key",
+                "cosign.key",
+                "--bundle",
+                "/tmp/trust-manifest.sig",
+                "--signing-config",
+                "/tmp/signing-config.json",
+                "/tmp/trust-manifest.json",
+            ]
+        );
+    }
+
+    fn service_urls(services: &[super::SigstoreService]) -> [Vec<String>; 4] {
+        let config: serde_json::Value =
+            serde_json::from_str(&super::sigstore_signing_config(services))
+                .expect("config should be JSON");
+        ["caUrls", "oidcUrls", "rekorTlogUrls", "tsaUrls"].map(|key| {
+            config[key]
+                .as_array()
+                .expect("list")
+                .iter()
+                .map(|service| service["url"].as_str().expect("url").to_owned())
+                .collect()
+        })
+    }
+
+    #[test]
+    fn signing_config_without_services_lists_none() {
+        assert_eq!(
+            service_urls(&[]),
+            [vec![], vec![], vec![], vec![]] as [Vec<String>; 4]
+        );
+    }
+
+    #[test]
+    fn signing_config_lists_only_selected_services() {
+        use super::SigstoreService::{Tlog, Tsa};
+
+        let [ca, oidc, rekor, tsa] = service_urls(&[Tlog]);
+        assert!(ca.is_empty() && oidc.is_empty() && tsa.is_empty());
+        assert_eq!(rekor, [super::SIGSTORE_REKOR_URL]);
+
+        let [ca, oidc, rekor, tsa] = service_urls(&[Tsa]);
+        assert!(ca.is_empty() && oidc.is_empty() && rekor.is_empty());
+        assert_eq!(tsa, [super::SIGSTORE_TSA_URL]);
+
+        let [ca, oidc, rekor, tsa] = service_urls(&[Tlog, Tsa]);
+        assert!(ca.is_empty() && oidc.is_empty());
+        assert_eq!(rekor, [super::SIGSTORE_REKOR_URL]);
+        assert_eq!(tsa, [super::SIGSTORE_TSA_URL]);
+    }
+
+    #[test]
+    fn rejects_sigstore_services_with_signing_config() {
+        let layout_dir = unique_temp_dir("ai-catalog-cli-layout-sigstore-options");
+        let (exit_code, stdout, stderr) = run_command(
+            [
+                "ai-catalog-cli",
+                "oci",
+                "export-layout",
+                "--cosign-key",
+                "cosign.key",
+                "--sigstore-services",
+                "tlog,tsa",
+                "--signing-config",
+                "config.json",
+                "-",
+                layout_dir.to_str().expect("path should be utf-8"),
+            ],
+            &canonical_fixture_text(),
+        );
+
+        assert_eq!(exit_code, 2);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("--signing-config"));
+    }
+
+    #[test]
+    fn rejects_unknown_sigstore_services() {
+        let layout_dir = unique_temp_dir("ai-catalog-cli-layout-sigstore-unknown");
+        let (exit_code, _, stderr) = run_command(
+            [
+                "ai-catalog-cli",
+                "oci",
+                "export-layout",
+                "--cosign-key",
+                "cosign.key",
+                "--sigstore-services",
+                "fulcio",
+                "-",
+                layout_dir.to_str().expect("path should be utf-8"),
+            ],
+            &canonical_fixture_text(),
+        );
+
+        assert_eq!(exit_code, 2);
+        assert!(stderr.contains("tlog") && stderr.contains("tsa"));
     }
 
     #[test]
