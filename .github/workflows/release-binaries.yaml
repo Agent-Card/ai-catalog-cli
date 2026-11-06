@@ -84,7 +84,7 @@ jobs:
   sign-binaries:
     name: Sign binaries
     needs: build-binaries
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       # Keyless signing exchanges this token for a short-lived Sigstore
