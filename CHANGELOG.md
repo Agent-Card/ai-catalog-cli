@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.3.0...v0.4.0) - 2026-11-06
+
+### Added
+
+- store the Sigstore bundle with each Cosign signature ([#66](https://github.com/Agent-Card/ai-catalog-cli/pull/66))
+- add a verify command for signed trust manifests ([#67](https://github.com/Agent-Card/ai-catalog-cli/pull/67))
+- [**breaking**] choose Sigstore services when signing, offline by default ([#65](https://github.com/Agent-Card/ai-catalog-cli/pull/65))
+- [**breaking**] support the spec #117 trust model ([#61](https://github.com/Agent-Card/ai-catalog-cli/pull/61))
+- *(catalog)* discover the catalog when adding a domain or site URL ([#59](https://github.com/Agent-Card/ai-catalog-cli/pull/59))
+
+### Fixed
+
+- *(deps)* update the lockfile to fix known vulnerabilities ([#58](https://github.com/Agent-Card/ai-catalog-cli/pull/58))
+
+### Other
+
+- *(deps)* update dependency renovatebot/renovate to v44.198.0 ([#49](https://github.com/Agent-Card/ai-catalog-cli/pull/49))
+- *(deps)* update github actions ([#50](https://github.com/Agent-Card/ai-catalog-cli/pull/50))
+- *(deps)* update dependency node to v26 ([#60](https://github.com/Agent-Card/ai-catalog-cli/pull/60))
+- update Homebrew formula for v0.3.0 ([#56](https://github.com/Agent-Card/ai-catalog-cli/pull/56))
+
 ## [0.3.0](https://github.com/Agent-Card/ai-catalog-cli/compare/v0.2.2...v0.3.0) - 2026-10-21
 
 ### Added
