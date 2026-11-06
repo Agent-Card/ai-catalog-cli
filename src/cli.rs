@@ -1,7 +1,7 @@
 // Copyright AI-Catalog Contributors (https://github.com/Agent-Card/ai-catalog-cli)
 // SPDX-License-Identifier: Apache-2.0
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// Inspect, validate, publish and consume AI Catalog documents.
 ///
@@ -22,6 +22,27 @@ pub enum Command {
         /// Print the report as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Verify the trust manifests of a catalog's entries
+    ///
+    /// Checks each manifest's release binding, its did-web-v1 signature against the
+    /// signer's did:web document, and its validity period, and checks inline data
+    /// against the entry digest. Exits 1 if any check fails.
+    Verify {
+        /// Catalog file, or '-' for stdin
+        path: String,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+        /// Use this DID document instead of fetching it, as DID=PATH (repeatable)
+        #[arg(long = "did-document", value_name = "DID=PATH")]
+        did_documents: Vec<String>,
+        /// Never fetch DID documents; manifests without a supplied document are inconclusive
+        #[arg(long)]
+        offline: bool,
+        /// Also exit 1 when a signed manifest could not be fully verified
+        #[arg(long)]
+        strict: bool,
     },
     /// Pretty-print a catalog
     Format {
@@ -160,6 +181,28 @@ pub struct PublishArgs {
     /// Public key to attach next to the signatures (defaults to the one for --cosign-key)
     #[arg(long, requires = "cosign_key")]
     pub cosign_public_key: Option<String>,
+    /// Public Sigstore services to record signatures with, comma-separated. Without this
+    /// option or --signing-config, signing uses no Sigstore service.
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        requires = "cosign_key",
+        conflicts_with = "signing_config"
+    )]
+    pub sigstore_services: Vec<SigstoreService>,
+    /// Cosign signing config to sign with instead, for example a private Sigstore deployment
+    #[arg(long, value_name = "PATH", requires = "cosign_key")]
+    pub signing_config: Option<String>,
+}
+
+/// A public Sigstore service that `cosign sign-blob` can record a signature with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SigstoreService {
+    /// Record each signature in the public Rekor transparency log (permanent and public)
+    Tlog,
+    /// Get an RFC 3161 timestamp from the Sigstore timestamp authority (sends only a hash)
+    Tsa,
 }
 
 #[derive(Debug, Args)]
