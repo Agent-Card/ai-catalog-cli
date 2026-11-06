@@ -8,6 +8,7 @@ pub mod commands;
 pub mod error;
 pub mod fetch;
 pub mod resolver;
+pub mod verify;
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -18,12 +19,12 @@ use ai_catalog::{AiCatalog, parse_file, parse_reader, write_writer};
 use clap::{CommandFactory, Parser};
 
 use ai_catalog_oci::{
-    OciArtifactSet, attach_cosign_verification_artifacts, export_layout, import_layout,
+    OciArtifactSet, attach_cosign_verification_artifacts_with_bundle, export_layout, import_layout,
     pack_catalog, unpack_catalog,
 };
 use ai_catalog_trust::canonicalize_trust_manifest;
 use ai_catalog_validate::{ConformanceLevel, Diagnostic, validate};
-use cli::{CatalogCommand, Cli, Command, OciCommand, PublishArgs, SearchArgs};
+use cli::{CatalogCommand, Cli, Command, OciCommand, PublishArgs, SearchArgs, SigstoreService};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
@@ -90,6 +91,13 @@ where
     match command {
         Command::Validate { path, json } => validate_command(&path, json, &mut io),
         Command::Format { path } => format_command(&path, &mut io),
+        Command::Verify {
+            path,
+            json,
+            did_documents,
+            offline,
+            strict,
+        } => verify_command(&path, json, &did_documents, offline, strict, &mut io),
         Command::Oci { command } => oci_command(command, &mut io),
         Command::Catalog { command } => {
             let result = match command {
@@ -376,11 +384,23 @@ fn pack(publish: &PublishArgs, io: &mut Io) -> io::Result<Option<OciArtifactSet>
     };
 
     if let Some(cosign_key) = &publish.cosign_key {
+        let services = &publish.sigstore_services;
+        if services.contains(&SigstoreService::Tlog) {
+            writeln!(
+                io.err,
+                "note: each signature is recorded in the public Rekor transparency log; entries are permanent"
+            )?;
+        }
+        let signing_config = match &publish.signing_config {
+            Some(path) => SigningConfig::File(path.clone()),
+            None => SigningConfig::Generated(sigstore_signing_config(services)),
+        };
         match attach_cosign_material(
             &catalog,
             &mut artifacts,
             cosign_key,
             publish.cosign_public_key.as_deref(),
+            &signing_config,
         ) {
             Ok(attached) => {
                 if attached > 0 {
@@ -565,6 +585,81 @@ fn push_artifacts_via_oras(
     }
 }
 
+fn verify_command(
+    path: &str,
+    json: bool,
+    did_documents: &[String],
+    offline: bool,
+    strict: bool,
+    io: &mut Io,
+) -> io::Result<i32> {
+    // The document is verified as served: signatures cover members the model does not keep.
+    let bytes = match read_bytes(path, io.stdin) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            writeln!(io.err, "failed to read {}: {error}", input_label(path))?;
+            return Ok(1);
+        }
+    };
+
+    let mut overrides = std::collections::BTreeMap::new();
+    for spec in did_documents {
+        let Some((did, file)) = spec.split_once('=') else {
+            writeln!(io.err, "--did-document must be DID=PATH, found '{spec}'")?;
+            return Ok(2);
+        };
+        let url = match verify::did_document_url(did) {
+            Ok(url) => url,
+            Err(error) => {
+                writeln!(io.err, "--did-document: {error}")?;
+                return Ok(2);
+            }
+        };
+        match fs::read(file) {
+            Ok(document) => {
+                overrides.insert(url, document);
+            }
+            Err(error) => {
+                writeln!(io.err, "failed to read DID document '{file}': {error}")?;
+                return Ok(2);
+            }
+        }
+    }
+
+    let fetch = verify::SafeFetch { overrides, offline };
+    let verification =
+        match ai_catalog_validate::verify(&bytes, &ai_catalog_validate::Options::default(), &fetch)
+        {
+            Ok(verification) => verification,
+            Err(error) => {
+                writeln!(io.err, "failed to verify {}: {error}", input_label(path))?;
+                return Ok(1);
+            }
+        };
+
+    let (failed, unverifiable) = verify::summarize(&verification);
+    if json {
+        writeln!(
+            io.out,
+            "{}",
+            serde_json::to_string_pretty(&verify::report_json(&verification))
+                .map_err(io::Error::other)?
+        )?;
+    } else {
+        if !verification.validation.is_valid {
+            writeln!(io.err, "catalog is invalid")?;
+            write_diagnostics(&mut io.err, "errors", &verification.validation.errors)?;
+        }
+        writeln!(io.out, "{}", verify::report_text(&verification))?;
+    }
+
+    Ok(if failed || (strict && unverifiable) {
+        1
+    } else {
+        0
+    })
+}
+
 fn read_catalog(path: &str, stdin: &mut dyn Read) -> ai_catalog::Result<ai_catalog::AiCatalog> {
     if path == "-" {
         parse_reader(stdin)
@@ -672,16 +767,17 @@ fn attach_cosign_material(
     artifacts: &mut OciArtifactSet,
     cosign_key: &str,
     cosign_public_key: Option<&str>,
+    signing_config: &SigningConfig,
 ) -> io::Result<usize> {
     let targets = catalog
         .entries
         .iter()
         .zip(artifacts.index.manifests.iter())
-        .filter_map(|(entry, descriptor)| {
+        .flat_map(|(entry, descriptor)| {
             entry
-                .trust_manifest
-                .clone()
-                .map(|trust_manifest| (descriptor.digest.clone(), trust_manifest))
+                .trust_manifests
+                .iter()
+                .map(|trust_manifest| (descriptor.digest.clone(), trust_manifest.clone()))
         })
         .collect::<Vec<_>>();
 
@@ -699,14 +795,15 @@ fn attach_cosign_material(
             "sha256:{}",
             digest_hex(Sha256::digest(&canonical_bytes).as_slice())
         );
-        let signature = sign_blob_with_cosign(&canonical_bytes, cosign_key)?;
+        let signed = sign_blob_with_cosign(&canonical_bytes, cosign_key, signing_config)?;
 
-        attach_cosign_verification_artifacts(
+        attach_cosign_verification_artifacts_with_bundle(
             artifacts,
             &subject_digest,
-            &trust_manifest.identity,
+            &trust_manifest.contributor,
             &payload_digest,
-            &signature,
+            &signed.signature,
+            Some(&signed.bundle),
             &public_key,
         )
         .map_err(io::Error::other)?;
@@ -715,8 +812,8 @@ fn attach_cosign_material(
     Ok(catalog
         .entries
         .iter()
-        .filter(|entry| entry.trust_manifest.is_some())
-        .count())
+        .map(|entry| entry.trust_manifests.len())
+        .sum())
 }
 
 fn load_cosign_public_key(
@@ -737,22 +834,97 @@ fn load_cosign_public_key(
     }
 }
 
-fn sign_blob_with_cosign(payload: &[u8], cosign_key: &str) -> io::Result<Vec<u8>> {
+/// The Sigstore signing config `cosign sign-blob` signs with.
+enum SigningConfig {
+    /// Generated from `--sigstore-services`.
+    Generated(String),
+    /// Given with `--signing-config`.
+    File(String),
+}
+
+// Public Sigstore endpoints, as listed in the `signing_config.v0.2.json` target of the
+// Sigstore TUF repository (github.com/sigstore/root-signing).
+const SIGSTORE_REKOR_URL: &str = "https://rekor.sigstore.dev";
+const SIGSTORE_REKOR_VALID_FROM: &str = "2021-01-12T11:53:27.000Z";
+const SIGSTORE_TSA_URL: &str = "https://timestamp.sigstore.dev/api/v1/timestamp";
+const SIGSTORE_TSA_VALID_FROM: &str = "2025-07-04T00:00:00Z";
+
+/// A signing config that uses only the selected public Sigstore services. Certificate
+/// authorities are never listed, since signing always uses `--key`.
+fn sigstore_signing_config(services: &[SigstoreService]) -> String {
+    let service = |url: &str, valid_from: &str| {
+        serde_json::json!({
+            "url": url,
+            "majorApiVersion": 1,
+            "validFor": { "start": valid_from },
+            "operator": "sigstore.dev",
+        })
+    };
+    let rekor = if services.contains(&SigstoreService::Tlog) {
+        vec![service(SIGSTORE_REKOR_URL, SIGSTORE_REKOR_VALID_FROM)]
+    } else {
+        Vec::new()
+    };
+    let tsa = if services.contains(&SigstoreService::Tsa) {
+        vec![service(SIGSTORE_TSA_URL, SIGSTORE_TSA_VALID_FROM)]
+    } else {
+        Vec::new()
+    };
+
+    serde_json::json!({
+        "mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+        "caUrls": [],
+        "oidcUrls": [],
+        "rekorTlogUrls": rekor,
+        "tsaUrls": tsa,
+        "rekorTlogConfig": { "selector": "ANY" },
+        "tsaConfig": { "selector": "ANY" },
+    })
+    .to_string()
+}
+
+/// The detached signature and the Sigstore bundle written by `cosign sign-blob`.
+struct CosignSignedBlob {
+    signature: Vec<u8>,
+    bundle: Vec<u8>,
+}
+
+fn sign_blob_with_cosign(
+    payload: &[u8],
+    cosign_key: &str,
+    signing_config: &SigningConfig,
+) -> io::Result<CosignSignedBlob> {
     let work_dir = temporary_layout_dir("ai-catalog-cosign");
     let payload_path = work_dir.join("trust-manifest.json");
     let bundle_path = work_dir.join("trust-manifest.bundle.json");
+    let generated_config_path = work_dir.join("signing-config.json");
 
     fs::create_dir_all(&work_dir)?;
     fs::write(&payload_path, payload)?;
+    let signing_config_path = match signing_config {
+        SigningConfig::Generated(config) => {
+            fs::write(&generated_config_path, config)?;
+            generated_config_path.clone()
+        }
+        SigningConfig::File(path) => PathBuf::from(path),
+    };
 
-    let args = build_cosign_sign_blob_args(cosign_key, &payload_path, &bundle_path);
+    let args = build_cosign_sign_blob_args(
+        cosign_key,
+        &payload_path,
+        &bundle_path,
+        Some(&signing_config_path),
+    );
     let output = execute_cosign(&args)?;
     let result = if output.status.success() {
         let bundle_bytes = fs::read(&bundle_path)?;
         let bundle: CosignBlobBundle =
             serde_json::from_slice(&bundle_bytes).map_err(io::Error::other)?;
 
-        Ok(bundle.message_signature.signature.into_bytes())
+        Ok(CosignSignedBlob {
+            signature: bundle.message_signature.signature.into_bytes(),
+            bundle: bundle_bytes,
+        })
     } else {
         Err(command_failure("cosign sign-blob", &output))
     };
@@ -765,16 +937,22 @@ fn build_cosign_sign_blob_args(
     cosign_key: &str,
     payload_path: &Path,
     bundle_path: &Path,
+    signing_config: Option<&Path>,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "sign-blob".to_owned(),
         "--yes".to_owned(),
         "--key".to_owned(),
         cosign_key.to_owned(),
         "--bundle".to_owned(),
         bundle_path.display().to_string(),
-        payload_path.display().to_string(),
-    ]
+    ];
+    if let Some(path) = signing_config {
+        args.push("--signing-config".to_owned());
+        args.push(path.display().to_string());
+    }
+    args.push(payload_path.display().to_string());
+    args
 }
 
 fn build_cosign_public_key_args(cosign_key: &str) -> Vec<String> {
@@ -936,7 +1114,8 @@ fn conformance_level_name(level: ConformanceLevel) -> &'static str {
 mod tests {
     use super::run;
     use ai_catalog_oci::{
-        COSIGN_PUBLIC_KEY_ARTIFACT_TYPE, COSIGN_SIGNATURE_ARTIFACT_TYPE,
+        COSIGN_BUNDLE_LAYER_MEDIA_TYPE, COSIGN_PUBLIC_KEY_ARTIFACT_TYPE,
+        COSIGN_SIGNATURE_ARTIFACT_TYPE, COSIGN_SIGNATURE_LAYER_MEDIA_TYPE,
         TRUST_MANIFEST_ARTIFACT_TYPE, import_layout,
     };
 
@@ -1249,9 +1428,13 @@ mod tests {
             "displayName": "Example Model",
             "type": "application/json",
             "data": { "name": "example" },
-            "trustManifest": {
-                "identity": "urn:example:model"
-            }
+            "trustManifests": [{
+                "contributor": "urn:example:model",
+                "trustSchema": {
+                    "identifier": "urn:trust:example",
+                    "version": "1.0"
+                }
+            }]
         }
     ]
 }"#;
@@ -1293,6 +1476,24 @@ mod tests {
         assert!(referrer_types.contains(&TRUST_MANIFEST_ARTIFACT_TYPE));
         assert!(referrer_types.contains(&COSIGN_SIGNATURE_ARTIFACT_TYPE));
         assert!(referrer_types.contains(&COSIGN_PUBLIC_KEY_ARTIFACT_TYPE));
+
+        let signature_layers = imported.referrers[&entry_digest]
+            .iter()
+            .find(|manifest| {
+                manifest.artifact_type.as_deref() == Some(COSIGN_SIGNATURE_ARTIFACT_TYPE)
+            })
+            .expect("signature referrer should exist")
+            .layers
+            .iter()
+            .map(|layer| layer.media_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            signature_layers,
+            [
+                COSIGN_SIGNATURE_LAYER_MEDIA_TYPE,
+                COSIGN_BUNDLE_LAYER_MEDIA_TYPE
+            ]
+        );
 
         fs::remove_dir_all(layout_dir).expect("layout dir should be removable");
         fs::remove_dir_all(tool_dir).expect("tool dir should be removable");
@@ -1397,6 +1598,7 @@ mod tests {
             "cosign.key",
             Path::new("/tmp/trust-manifest.json"),
             Path::new("/tmp/trust-manifest.sig"),
+            None,
         );
 
         assert_eq!(
@@ -1411,6 +1613,118 @@ mod tests {
                 "/tmp/trust-manifest.json",
             ]
         );
+    }
+
+    #[test]
+    fn builds_offline_cosign_sign_blob_arguments() {
+        let args = super::build_cosign_sign_blob_args(
+            "cosign.key",
+            Path::new("/tmp/trust-manifest.json"),
+            Path::new("/tmp/trust-manifest.sig"),
+            Some(Path::new("/tmp/signing-config.json")),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "sign-blob",
+                "--yes",
+                "--key",
+                "cosign.key",
+                "--bundle",
+                "/tmp/trust-manifest.sig",
+                "--signing-config",
+                "/tmp/signing-config.json",
+                "/tmp/trust-manifest.json",
+            ]
+        );
+    }
+
+    fn service_urls(services: &[super::SigstoreService]) -> [Vec<String>; 4] {
+        let config: serde_json::Value =
+            serde_json::from_str(&super::sigstore_signing_config(services))
+                .expect("config should be JSON");
+        ["caUrls", "oidcUrls", "rekorTlogUrls", "tsaUrls"].map(|key| {
+            config[key]
+                .as_array()
+                .expect("list")
+                .iter()
+                .map(|service| service["url"].as_str().expect("url").to_owned())
+                .collect()
+        })
+    }
+
+    #[test]
+    fn signing_config_without_services_lists_none() {
+        assert_eq!(
+            service_urls(&[]),
+            [vec![], vec![], vec![], vec![]] as [Vec<String>; 4]
+        );
+    }
+
+    #[test]
+    fn signing_config_lists_only_selected_services() {
+        use super::SigstoreService::{Tlog, Tsa};
+
+        let [ca, oidc, rekor, tsa] = service_urls(&[Tlog]);
+        assert!(ca.is_empty() && oidc.is_empty() && tsa.is_empty());
+        assert_eq!(rekor, [super::SIGSTORE_REKOR_URL]);
+
+        let [ca, oidc, rekor, tsa] = service_urls(&[Tsa]);
+        assert!(ca.is_empty() && oidc.is_empty() && rekor.is_empty());
+        assert_eq!(tsa, [super::SIGSTORE_TSA_URL]);
+
+        let [ca, oidc, rekor, tsa] = service_urls(&[Tlog, Tsa]);
+        assert!(ca.is_empty() && oidc.is_empty());
+        assert_eq!(rekor, [super::SIGSTORE_REKOR_URL]);
+        assert_eq!(tsa, [super::SIGSTORE_TSA_URL]);
+    }
+
+    #[test]
+    fn rejects_sigstore_services_with_signing_config() {
+        let layout_dir = unique_temp_dir("ai-catalog-cli-layout-sigstore-options");
+        let (exit_code, stdout, stderr) = run_command(
+            [
+                "ai-catalog-cli",
+                "oci",
+                "export-layout",
+                "--cosign-key",
+                "cosign.key",
+                "--sigstore-services",
+                "tlog,tsa",
+                "--signing-config",
+                "config.json",
+                "-",
+                layout_dir.to_str().expect("path should be utf-8"),
+            ],
+            &canonical_fixture_text(),
+        );
+
+        assert_eq!(exit_code, 2);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("--signing-config"));
+    }
+
+    #[test]
+    fn rejects_unknown_sigstore_services() {
+        let layout_dir = unique_temp_dir("ai-catalog-cli-layout-sigstore-unknown");
+        let (exit_code, _, stderr) = run_command(
+            [
+                "ai-catalog-cli",
+                "oci",
+                "export-layout",
+                "--cosign-key",
+                "cosign.key",
+                "--sigstore-services",
+                "fulcio",
+                "-",
+                layout_dir.to_str().expect("path should be utf-8"),
+            ],
+            &canonical_fixture_text(),
+        );
+
+        assert_eq!(exit_code, 2);
+        assert!(stderr.contains("tlog") && stderr.contains("tsa"));
     }
 
     #[test]
@@ -1502,6 +1816,182 @@ mod tests {
     }
 
     #[cfg(unix)]
+    const VERIFY_SIGNER: &str = "did:web:apexretail.com";
+    const VERIFY_KID: &str = "did:web:apexretail.com#release-key";
+
+    /// A catalog whose single entry carries inline data and a publisher manifest
+    /// signed under did-web-v1, plus the DID document for the signing key.
+    fn signed_verify_fixture(edit: impl FnOnce(&mut serde_json::Value)) -> (String, String) {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use p256::ecdsa::signature::Signer as _;
+        use p256::ecdsa::{Signature, SigningKey};
+        use sha2::Digest as _;
+
+        let key = SigningKey::from_slice(&[7u8; 32]).expect("valid scalar");
+        let data = serde_json::json!({ "name": "refund-bot", "version": "1.2.0" });
+        let jcs = ai_catalog_trust::canonicalize(data.to_string()).expect("canonicalizes");
+        let digest = format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(jcs.as_bytes()))
+        );
+        let subject = serde_json::json!({
+            "identifier": "urn:air:apexretail.com:claims:refund-bot",
+            "version": "1.2.0",
+            "type": "application/a2a-agent-card+json",
+            "digest": digest,
+        });
+        let mut manifest = serde_json::json!({
+            "contributor": VERIFY_SIGNER,
+            "subject": subject,
+            "attestations": [{ "type": "SOC2-Type2", "uri": "https://example.com/soc2.pdf" }],
+            "signature": {
+                "signer": VERIFY_SIGNER,
+                "profile": "did-web-v1",
+                "issuedAt": "2026-01-01T00:00:00Z",
+                "expiresAt": "2099-01-01T00:00:00Z",
+            },
+        });
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({
+                "alg": "ES256",
+                "kid": VERIFY_KID,
+                "typ": "ai-catalog-trust-manifest+jws",
+            })
+            .to_string(),
+        );
+        let payload = ai_catalog_trust::canonicalize_for_signature(manifest.to_string())
+            .expect("canonicalizes");
+        let signing_input = format!("{header}.{}", URL_SAFE_NO_PAD.encode(payload));
+        let signature: Signature = key.sign(signing_input.as_bytes());
+        manifest["signature"]["jws"] = serde_json::json!(format!(
+            "{header}..{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        ));
+
+        let mut catalog = serde_json::json!({
+            "specVersion": "1.0",
+            "host": { "displayName": "Apex Retail", "identifier": VERIFY_SIGNER },
+            "entries": [{
+                "identifier": "urn:air:apexretail.com:claims:refund-bot",
+                "version": "1.2.0",
+                "type": "application/a2a-agent-card+json",
+                "data": data,
+                "digest": digest,
+                "trustManifests": [manifest],
+            }],
+        });
+        edit(&mut catalog);
+
+        let point = key.verifying_key().to_sec1_point(false);
+        let (x, y) = point.as_bytes()[1..].split_at(32);
+        let did_document = serde_json::json!({
+            "id": VERIFY_SIGNER,
+            "verificationMethod": [{
+                "id": VERIFY_KID,
+                "type": "JsonWebKey",
+                "controller": VERIFY_SIGNER,
+                "publicKeyJwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": URL_SAFE_NO_PAD.encode(x),
+                    "y": URL_SAFE_NO_PAD.encode(y),
+                },
+            }],
+            "assertionMethod": [VERIFY_KID],
+        });
+        (catalog.to_string(), did_document.to_string())
+    }
+
+    fn run_verify(
+        catalog: &str,
+        did_document: Option<&str>,
+        extra: &[&str],
+    ) -> (i32, String, String) {
+        // A fresh directory per call: tests run in parallel, and time-based names can collide.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let document_path = dir.path().join("did.json");
+        let mut args = vec![
+            "ai-catalog-cli".to_owned(),
+            "verify".to_owned(),
+            "--offline".to_owned(),
+        ];
+        if let Some(document) = did_document {
+            fs::write(&document_path, document).expect("write did document");
+            args.push("--did-document".to_owned());
+            args.push(format!("{VERIFY_SIGNER}={}", document_path.display()));
+        }
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args.push("-".to_owned());
+        run_command(args.iter().map(String::as_str), catalog)
+    }
+
+    #[test]
+    fn verify_accepts_a_valid_publisher_signature() {
+        let (catalog, document) = signed_verify_fixture(|_| {});
+        let (exit_code, stdout, stderr) = run_verify(&catalog, Some(&document), &[]);
+
+        assert_eq!(exit_code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(stdout.contains("conformance: trusted"), "{stdout}");
+        assert!(stdout.contains("[ok] signature"), "{stdout}");
+        assert!(stdout.contains("[ok] artifact digest"), "{stdout}");
+    }
+
+    #[test]
+    fn verify_fails_on_a_tampered_claim() {
+        let (catalog, document) = signed_verify_fixture(|catalog| {
+            catalog["entries"][0]["trustManifests"][0]["attestations"][0]["type"] =
+                serde_json::json!("ISO27001");
+        });
+        let (exit_code, stdout, _) = run_verify(&catalog, Some(&document), &[]);
+
+        assert_eq!(exit_code, 1);
+        assert!(stdout.contains("[FAIL] signature"), "{stdout}");
+    }
+
+    #[test]
+    fn verify_reports_unverifiable_offline_and_fails_with_strict() {
+        let (catalog, _) = signed_verify_fixture(|_| {});
+
+        let (exit_code, stdout, _) = run_verify(&catalog, None, &[]);
+        assert_eq!(exit_code, 0);
+        assert!(stdout.contains("[??] signature"), "{stdout}");
+
+        let (exit_code, _, _) = run_verify(&catalog, None, &["--strict"]);
+        assert_eq!(exit_code, 1);
+    }
+
+    #[test]
+    fn verify_prints_a_json_report() {
+        let (catalog, document) = signed_verify_fixture(|_| {});
+        let (exit_code, stdout, _) = run_verify(&catalog, Some(&document), &["--json"]);
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("json report");
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(report["conformance"], "trusted");
+        assert_eq!(
+            report["entries"][0]["manifests"][0]["signature"]["result"],
+            "verified"
+        );
+        assert_eq!(report["entries"][0]["manifests"][0]["publisher"], true);
+    }
+
+    #[test]
+    fn verify_rejects_a_non_root_did_document_override() {
+        let (catalog, document) = signed_verify_fixture(|_| {});
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("did.json");
+        fs::write(&path, document).expect("write");
+        let spec = format!("did:web:example.com:users:alice={}", path.display());
+        let (exit_code, _, stderr) = run_command(
+            ["ai-catalog-cli", "verify", "--did-document", &spec, "-"],
+            &catalog,
+        );
+
+        assert_eq!(exit_code, 2);
+        assert!(stderr.contains("root did:web"), "{stderr}");
+    }
+
     fn write_fake_cosign_script(dir: &Path) -> PathBuf {
         let script_path = dir.join("fake-cosign.sh");
         let mut file = fs::File::create(&script_path).expect("script should be creatable");

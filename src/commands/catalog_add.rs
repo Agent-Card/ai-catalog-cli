@@ -54,7 +54,8 @@ fn add(cache: &CacheManager, fetcher: &dyn Fetcher, name: &str, input: &str) -> 
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
         extensions: Some(extensions),
         publisher: None,
-        trust_manifest: None,
+        digest: None,
+        trust_manifests: Vec::new(),
         extra_fields: Default::default(),
     };
     let mut registry = cache.read_registry()?;

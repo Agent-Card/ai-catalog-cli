@@ -19,11 +19,11 @@ name = "ai-catalog"
 path = "src/main.rs"
 
 [dependencies]
-ai-catalog = "0.3.0"
-ai-catalog-discover = "0.3.0"
-ai-catalog-oci = "0.3.0"
-ai-catalog-trust = "0.3.0"
-ai-catalog-validate = "0.3.0"
+ai-catalog = "0.4.0"
+ai-catalog-discover = "0.4.0"
+ai-catalog-oci = "0.4.0"
+ai-catalog-trust = "0.4.0"
+ai-catalog-validate = "0.4.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 colored = "3"
@@ -38,4 +38,6 @@ thiserror = "2.0"
 url = "2"
 
 [dev-dependencies]
+base64 = "0.23"
+p256 = { version = "0.14", features = ["ecdsa"] }
 tempfile = "3"
