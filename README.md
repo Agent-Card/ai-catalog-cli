@@ -106,6 +106,7 @@ This CLI builds on the four AI Catalog library crates, released separately from
 
 ```
 ai-catalog validate [--json] <path|->
+ai-catalog verify [--json] [--did-document <DID=PATH>]... [--offline] [--strict] <path|->
 ai-catalog format <path|->
 ai-catalog oci pack <path|->
 ai-catalog oci unpack <path|->
@@ -133,7 +134,8 @@ Use `-` as `<path>` to read from stdin. Every command accepts `--help`.
 ### `validate`
 
 Validates a catalog document against the AI Catalog specification and reports
-the conformance level (Minimal / Discoverable / Trusted).
+its structural conformance level (Minimal or Discoverable). The Trusted level
+requires verifying signatures and artifacts; use [`verify`](#verify) for that.
 
 ```sh
 ai-catalog validate catalog.json          # text report
@@ -146,6 +148,34 @@ Exits with code `0` on success, `1` on validation errors.
 With `--json`, each error and warning has a stable `code` (for example
 `entry-duplicate`) next to its `path` and `message`. Match on the code rather
 than the message. `code` is `null` when the input could not be parsed.
+
+---
+
+### `verify`
+
+Validates a catalog and verifies the signatures and artifacts of its root entries, using
+`ai_catalog_validate::verify`.
+
+```sh
+ai-catalog verify catalog.json
+ai-catalog verify --json catalog.json
+ai-catalog verify --offline --did-document did:web:example.com=did.json catalog.json
+```
+
+For each trust manifest it reports the `did-web-v1` signature (signer, protected header,
+`assertionMethod` key in the signer's root `did:web` document, validity period, and the
+detached ES256 JWS) and the release binding of its `subject` to the entry. For each entry it
+reports whether the publisher endorsed it and, once a manifest is accepted, whether the
+artifact matches `digest`. The catalog's conformance level is Trusted only when an entry has a
+verified publisher endorsement and none fails.
+
+DID documents and artifacts are fetched over HTTPS only, without redirects, with size and time
+limits, and refusing private, loopback, and link-local addresses. `--did-document DID=PATH`
+supplies a DID document locally, and `--offline` never fetches.
+
+Each check is `verified`, `failed`, or `unverifiable` (it could not run, for example a fetch
+skipped with `--offline`). Exits with `1` when the catalog is invalid or any check fails; with
+`--strict`, also when a check is unverifiable.
 
 ---
 

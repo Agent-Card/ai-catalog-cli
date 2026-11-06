@@ -23,6 +23,27 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Verify the trust manifests of a catalog's entries
+    ///
+    /// Checks each manifest's release binding, its did-web-v1 signature against the
+    /// signer's did:web document, and its validity period, and checks inline data
+    /// against the entry digest. Exits 1 if any check fails.
+    Verify {
+        /// Catalog file, or '-' for stdin
+        path: String,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+        /// Use this DID document instead of fetching it, as DID=PATH (repeatable)
+        #[arg(long = "did-document", value_name = "DID=PATH")]
+        did_documents: Vec<String>,
+        /// Never fetch DID documents; manifests without a supplied document are inconclusive
+        #[arg(long)]
+        offline: bool,
+        /// Also exit 1 when a signed manifest could not be fully verified
+        #[arg(long)]
+        strict: bool,
+    },
     /// Pretty-print a catalog
     Format {
         /// Catalog file, or '-' for stdin

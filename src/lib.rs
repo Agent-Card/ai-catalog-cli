@@ -8,6 +8,7 @@ pub mod commands;
 pub mod error;
 pub mod fetch;
 pub mod resolver;
+pub mod verify;
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -90,6 +91,13 @@ where
     match command {
         Command::Validate { path, json } => validate_command(&path, json, &mut io),
         Command::Format { path } => format_command(&path, &mut io),
+        Command::Verify {
+            path,
+            json,
+            did_documents,
+            offline,
+            strict,
+        } => verify_command(&path, json, &did_documents, offline, strict, &mut io),
         Command::Oci { command } => oci_command(command, &mut io),
         Command::Catalog { command } => {
             let result = match command {
@@ -582,6 +590,81 @@ fn push_artifacts_via_oras(
 
         Ok(output.status.code().unwrap_or(1))
     }
+}
+
+fn verify_command(
+    path: &str,
+    json: bool,
+    did_documents: &[String],
+    offline: bool,
+    strict: bool,
+    io: &mut Io,
+) -> io::Result<i32> {
+    // The document is verified as served: signatures cover members the model does not keep.
+    let bytes = match read_bytes(path, io.stdin) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            writeln!(io.err, "failed to read {}: {error}", input_label(path))?;
+            return Ok(1);
+        }
+    };
+
+    let mut overrides = std::collections::BTreeMap::new();
+    for spec in did_documents {
+        let Some((did, file)) = spec.split_once('=') else {
+            writeln!(io.err, "--did-document must be DID=PATH, found '{spec}'")?;
+            return Ok(2);
+        };
+        let url = match verify::did_document_url(did) {
+            Ok(url) => url,
+            Err(error) => {
+                writeln!(io.err, "--did-document: {error}")?;
+                return Ok(2);
+            }
+        };
+        match fs::read(file) {
+            Ok(document) => {
+                overrides.insert(url, document);
+            }
+            Err(error) => {
+                writeln!(io.err, "failed to read DID document '{file}': {error}")?;
+                return Ok(2);
+            }
+        }
+    }
+
+    let fetch = verify::SafeFetch { overrides, offline };
+    let verification =
+        match ai_catalog_validate::verify(&bytes, &ai_catalog_validate::Options::default(), &fetch)
+        {
+            Ok(verification) => verification,
+            Err(error) => {
+                writeln!(io.err, "failed to verify {}: {error}", input_label(path))?;
+                return Ok(1);
+            }
+        };
+
+    let (failed, unverifiable) = verify::summarize(&verification);
+    if json {
+        writeln!(
+            io.out,
+            "{}",
+            serde_json::to_string_pretty(&verify::report_json(&verification))
+                .map_err(io::Error::other)?
+        )?;
+    } else {
+        if !verification.validation.is_valid {
+            writeln!(io.err, "catalog is invalid")?;
+            write_diagnostics(&mut io.err, "errors", &verification.validation.errors)?;
+        }
+        writeln!(io.out, "{}", verify::report_text(&verification))?;
+    }
+
+    Ok(if failed || (strict && unverifiable) {
+        1
+    } else {
+        0
+    })
 }
 
 fn read_catalog(path: &str, stdin: &mut dyn Read) -> ai_catalog::Result<ai_catalog::AiCatalog> {
@@ -1711,6 +1794,182 @@ mod tests {
     }
 
     #[cfg(unix)]
+    const VERIFY_SIGNER: &str = "did:web:apexretail.com";
+    const VERIFY_KID: &str = "did:web:apexretail.com#release-key";
+
+    /// A catalog whose single entry carries inline data and a publisher manifest
+    /// signed under did-web-v1, plus the DID document for the signing key.
+    fn signed_verify_fixture(edit: impl FnOnce(&mut serde_json::Value)) -> (String, String) {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use p256::ecdsa::signature::Signer as _;
+        use p256::ecdsa::{Signature, SigningKey};
+        use sha2::Digest as _;
+
+        let key = SigningKey::from_slice(&[7u8; 32]).expect("valid scalar");
+        let data = serde_json::json!({ "name": "refund-bot", "version": "1.2.0" });
+        let jcs = ai_catalog_trust::canonicalize(data.to_string()).expect("canonicalizes");
+        let digest = format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(jcs.as_bytes()))
+        );
+        let subject = serde_json::json!({
+            "identifier": "urn:air:apexretail.com:claims:refund-bot",
+            "version": "1.2.0",
+            "type": "application/a2a-agent-card+json",
+            "digest": digest,
+        });
+        let mut manifest = serde_json::json!({
+            "contributor": VERIFY_SIGNER,
+            "subject": subject,
+            "attestations": [{ "type": "SOC2-Type2", "uri": "https://example.com/soc2.pdf" }],
+            "signature": {
+                "signer": VERIFY_SIGNER,
+                "profile": "did-web-v1",
+                "issuedAt": "2026-01-01T00:00:00Z",
+                "expiresAt": "2099-01-01T00:00:00Z",
+            },
+        });
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({
+                "alg": "ES256",
+                "kid": VERIFY_KID,
+                "typ": "ai-catalog-trust-manifest+jws",
+            })
+            .to_string(),
+        );
+        let payload = ai_catalog_trust::canonicalize_for_signature(manifest.to_string())
+            .expect("canonicalizes");
+        let signing_input = format!("{header}.{}", URL_SAFE_NO_PAD.encode(payload));
+        let signature: Signature = key.sign(signing_input.as_bytes());
+        manifest["signature"]["jws"] = serde_json::json!(format!(
+            "{header}..{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        ));
+
+        let mut catalog = serde_json::json!({
+            "specVersion": "1.0",
+            "host": { "displayName": "Apex Retail", "identifier": VERIFY_SIGNER },
+            "entries": [{
+                "identifier": "urn:air:apexretail.com:claims:refund-bot",
+                "version": "1.2.0",
+                "type": "application/a2a-agent-card+json",
+                "data": data,
+                "digest": digest,
+                "trustManifests": [manifest],
+            }],
+        });
+        edit(&mut catalog);
+
+        let point = key.verifying_key().to_sec1_point(false);
+        let (x, y) = point.as_bytes()[1..].split_at(32);
+        let did_document = serde_json::json!({
+            "id": VERIFY_SIGNER,
+            "verificationMethod": [{
+                "id": VERIFY_KID,
+                "type": "JsonWebKey",
+                "controller": VERIFY_SIGNER,
+                "publicKeyJwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": URL_SAFE_NO_PAD.encode(x),
+                    "y": URL_SAFE_NO_PAD.encode(y),
+                },
+            }],
+            "assertionMethod": [VERIFY_KID],
+        });
+        (catalog.to_string(), did_document.to_string())
+    }
+
+    fn run_verify(
+        catalog: &str,
+        did_document: Option<&str>,
+        extra: &[&str],
+    ) -> (i32, String, String) {
+        // A fresh directory per call: tests run in parallel, and time-based names can collide.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let document_path = dir.path().join("did.json");
+        let mut args = vec![
+            "ai-catalog-cli".to_owned(),
+            "verify".to_owned(),
+            "--offline".to_owned(),
+        ];
+        if let Some(document) = did_document {
+            fs::write(&document_path, document).expect("write did document");
+            args.push("--did-document".to_owned());
+            args.push(format!("{VERIFY_SIGNER}={}", document_path.display()));
+        }
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args.push("-".to_owned());
+        run_command(args.iter().map(String::as_str), catalog)
+    }
+
+    #[test]
+    fn verify_accepts_a_valid_publisher_signature() {
+        let (catalog, document) = signed_verify_fixture(|_| {});
+        let (exit_code, stdout, stderr) = run_verify(&catalog, Some(&document), &[]);
+
+        assert_eq!(exit_code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(stdout.contains("conformance: trusted"), "{stdout}");
+        assert!(stdout.contains("[ok] signature"), "{stdout}");
+        assert!(stdout.contains("[ok] artifact digest"), "{stdout}");
+    }
+
+    #[test]
+    fn verify_fails_on_a_tampered_claim() {
+        let (catalog, document) = signed_verify_fixture(|catalog| {
+            catalog["entries"][0]["trustManifests"][0]["attestations"][0]["type"] =
+                serde_json::json!("ISO27001");
+        });
+        let (exit_code, stdout, _) = run_verify(&catalog, Some(&document), &[]);
+
+        assert_eq!(exit_code, 1);
+        assert!(stdout.contains("[FAIL] signature"), "{stdout}");
+    }
+
+    #[test]
+    fn verify_reports_unverifiable_offline_and_fails_with_strict() {
+        let (catalog, _) = signed_verify_fixture(|_| {});
+
+        let (exit_code, stdout, _) = run_verify(&catalog, None, &[]);
+        assert_eq!(exit_code, 0);
+        assert!(stdout.contains("[??] signature"), "{stdout}");
+
+        let (exit_code, _, _) = run_verify(&catalog, None, &["--strict"]);
+        assert_eq!(exit_code, 1);
+    }
+
+    #[test]
+    fn verify_prints_a_json_report() {
+        let (catalog, document) = signed_verify_fixture(|_| {});
+        let (exit_code, stdout, _) = run_verify(&catalog, Some(&document), &["--json"]);
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("json report");
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(report["conformance"], "trusted");
+        assert_eq!(
+            report["entries"][0]["manifests"][0]["signature"]["result"],
+            "verified"
+        );
+        assert_eq!(report["entries"][0]["manifests"][0]["publisher"], true);
+    }
+
+    #[test]
+    fn verify_rejects_a_non_root_did_document_override() {
+        let (catalog, document) = signed_verify_fixture(|_| {});
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("did.json");
+        fs::write(&path, document).expect("write");
+        let spec = format!("did:web:example.com:users:alice={}", path.display());
+        let (exit_code, _, stderr) = run_command(
+            ["ai-catalog-cli", "verify", "--did-document", &spec, "-"],
+            &catalog,
+        );
+
+        assert_eq!(exit_code, 2);
+        assert!(stderr.contains("root did:web"), "{stderr}");
+    }
+
     fn write_fake_cosign_script(dir: &Path) -> PathBuf {
         let script_path = dir.join("fake-cosign.sh");
         let mut file = fs::File::create(&script_path).expect("script should be creatable");
