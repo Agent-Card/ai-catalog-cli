@@ -266,13 +266,15 @@ try {
         "name": "inline",
         "version": 1
       },
-      "trustManifest": {
-        "identity": "urn:example:inline",
-        "trustSchema": {
-          "identifier": "urn:ai-catalog:trust-schema:minimal:v1",
-          "version": "1.0"
+      "trustManifests": [
+        {
+          "contributor": "urn:example:inline",
+          "trustSchema": {
+            "identifier": "urn:ai-catalog:trust-schema:minimal:v1",
+            "version": "1.0"
+          }
         }
-      }
+      ]
     }
   ]
 }

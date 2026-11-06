@@ -677,11 +677,11 @@ fn attach_cosign_material(
         .entries
         .iter()
         .zip(artifacts.index.manifests.iter())
-        .filter_map(|(entry, descriptor)| {
+        .flat_map(|(entry, descriptor)| {
             entry
-                .trust_manifest
-                .clone()
-                .map(|trust_manifest| (descriptor.digest.clone(), trust_manifest))
+                .trust_manifests
+                .iter()
+                .map(|trust_manifest| (descriptor.digest.clone(), trust_manifest.clone()))
         })
         .collect::<Vec<_>>();
 
@@ -704,7 +704,7 @@ fn attach_cosign_material(
         attach_cosign_verification_artifacts(
             artifacts,
             &subject_digest,
-            &trust_manifest.identity,
+            &trust_manifest.contributor,
             &payload_digest,
             &signature,
             &public_key,
@@ -715,8 +715,8 @@ fn attach_cosign_material(
     Ok(catalog
         .entries
         .iter()
-        .filter(|entry| entry.trust_manifest.is_some())
-        .count())
+        .map(|entry| entry.trust_manifests.len())
+        .sum())
 }
 
 fn load_cosign_public_key(
@@ -1249,9 +1249,13 @@ mod tests {
             "displayName": "Example Model",
             "type": "application/json",
             "data": { "name": "example" },
-            "trustManifest": {
-                "identity": "urn:example:model"
-            }
+            "trustManifests": [{
+                "contributor": "urn:example:model",
+                "trustSchema": {
+                    "identifier": "urn:trust:example",
+                    "version": "1.0"
+                }
+            }]
         }
     ]
 }"#;
