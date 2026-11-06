@@ -87,7 +87,8 @@ pub fn execute(name: &str, layout_path: &str, ref_name: Option<&str>) -> Result<
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
         extensions: Some(extensions),
         publisher: None,
-        trust_manifest: None,
+        digest: None,
+        trust_manifests: Vec::new(),
         extra_fields: Default::default(),
     };
 

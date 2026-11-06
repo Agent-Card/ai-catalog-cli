@@ -79,6 +79,7 @@ impl CacheManager {
                 }),
                 entries: vec![],
                 signature: None,
+                additional_signatures: None,
                 extensions: None,
                 extra_fields: Default::default(),
             });

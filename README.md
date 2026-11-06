@@ -106,12 +106,13 @@ This CLI builds on the four AI Catalog library crates, released separately from
 
 ```
 ai-catalog validate [--json] <path|->
+ai-catalog verify [--json] [--did-document <DID=PATH>]... [--offline] [--strict] <path|->
 ai-catalog format <path|->
 ai-catalog oci pack <path|->
 ai-catalog oci unpack <path|->
-ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <layout-dir>
+ai-catalog oci export-layout [--tag <tag>] [--cosign-key <path>] [--cosign-public-key <path>] [--sigstore-services <tlog,tsa>] [--signing-config <path>] <path|-> <layout-dir>
 ai-catalog oci unpack-layout [--ref-name <name>] <layout-dir>
-ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] <path|-> <target>
+ai-catalog oci push [--tag <tag>] [--plain-http] [--insecure] [--to-oci-layout-path <layout-dir>] [--cosign-key <path>] [--cosign-public-key <path>] [--sigstore-services <tlog,tsa>] [--signing-config <path>] <path|-> <target>
 ai-catalog oci add <name> <layout-dir> [--ref-name <tag>]
 ai-catalog oci search [--regex] [-n <limit>] [--json] <keyword>
 ai-catalog oci show [--json] [--media-type <type>] <identifier>
@@ -133,7 +134,8 @@ Use `-` as `<path>` to read from stdin. Every command accepts `--help`.
 ### `validate`
 
 Validates a catalog document against the AI Catalog specification and reports
-the conformance level (Minimal / Discoverable / Trusted).
+its structural conformance level (Minimal or Discoverable). The Trusted level
+requires verifying signatures and artifacts; use [`verify`](#verify) for that.
 
 ```sh
 ai-catalog validate catalog.json          # text report
@@ -146,6 +148,34 @@ Exits with code `0` on success, `1` on validation errors.
 With `--json`, each error and warning has a stable `code` (for example
 `entry-duplicate`) next to its `path` and `message`. Match on the code rather
 than the message. `code` is `null` when the input could not be parsed.
+
+---
+
+### `verify`
+
+Validates a catalog and verifies the signatures and artifacts of its root entries, using
+`ai_catalog_validate::verify`.
+
+```sh
+ai-catalog verify catalog.json
+ai-catalog verify --json catalog.json
+ai-catalog verify --offline --did-document did:web:example.com=did.json catalog.json
+```
+
+For each trust manifest it reports the `did-web-v1` signature (signer, protected header,
+`assertionMethod` key in the signer's root `did:web` document, validity period, and the
+detached ES256 JWS) and the release binding of its `subject` to the entry. For each entry it
+reports whether the publisher endorsed it and, once a manifest is accepted, whether the
+artifact matches `digest`. The catalog's conformance level is Trusted only when an entry has a
+verified publisher endorsement and none fails.
+
+DID documents and artifacts are fetched over HTTPS only, without redirects, with size and time
+limits, and refusing private, loopback, and link-local addresses. `--did-document DID=PATH`
+supplies a DID document locally, and `--offline` never fetches.
+
+Each check is `verified`, `failed`, or `unverifiable` (it could not run, for example a fetch
+skipped with `--offline`). Exits with `1` when the catalog is invalid or any check fails; with
+`--strict`, also when a check is unverifiable.
 
 ---
 
@@ -282,8 +312,8 @@ stdout. Omitting `--output` writes to the current directory.
 
 `--scope` follows the same name-or-URI rules as `show`.
 
-If the entry's trust manifest has a `subject`, the content is checked against
-`subject.digest` first, and a mismatch fails the pull. Signatures are not verified.
+If the entry has a `digest`, the content is checked against it first, and a
+mismatch fails the pull. Signatures are not verified.
 
 When the identifier resolves to a nested catalog entry
 (`application/ai-catalog+json`), `--media-type` is required:
@@ -348,6 +378,8 @@ ai-catalog oci export-layout \
 | `--tag <tag>` | OCI tag to apply (default: `latest`) |
 | `--cosign-key <path>` | Path to Cosign private key; triggers signing of trust manifests |
 | `--cosign-public-key <path>` | Path to PEM public key (derived from `--cosign-key` if omitted) |
+| `--sigstore-services <list>` | Public Sigstore services to sign with, comma-separated: `tlog` (Rekor transparency log), `tsa` (RFC 3161 timestamp). Default: none |
+| `--signing-config <path>` | Cosign signing config to use instead, for example a private Sigstore deployment |
 
 Reads from stdin when `<path>` is `-`.
 
@@ -396,6 +428,8 @@ ai-catalog oci push \
 | `--to-oci-layout-path <dir>` | Also write the exported layout to this directory |
 | `--cosign-key <path>` | Path to Cosign private key |
 | `--cosign-public-key <path>` | Path to PEM public key |
+| `--sigstore-services <list>` | Public Sigstore services to sign with, comma-separated: `tlog` (Rekor transparency log), `tsa` (RFC 3161 timestamp). Default: none |
+| `--signing-config <path>` | Cosign signing config to use instead, for example a private Sigstore deployment |
 
 Reads from stdin when `<path>` is `-`. Requires `oras` on `PATH`.
 
@@ -484,16 +518,25 @@ variants are restricted to OCI-sourced entries. See
 
 When `--cosign-key` is supplied to `oci export-layout` or `oci push`, the CLI:
 
-1. Canonicalizes each entry trust manifest (key-sorted JSON, `signature` field stripped)
-2. Signs the canonical blob with `cosign sign-blob`
+1. Canonicalizes each entry trust manifest (key-sorted JSON, `signature.jws` and `additionalSignatures` stripped)
+2. Signs the canonical blob with `cosign sign-blob` and a Sigstore signing config that
+   lists only the services you choose. By default it lists none, so nothing leaves the
+   machine. `--sigstore-services tlog` records each signature in the public Rekor log
+   (permanent and public); `--sigstore-services tsa` adds an RFC 3161 timestamp from the
+   Sigstore timestamp authority, which receives only a hash. `--signing-config <path>`
+   passes your own config, for example a private Rekor or timestamp authority.
+   Log entries and timestamps are kept in the Cosign bundle stored with each signature.
 3. Attaches three OCI referrer artifacts to each signed entry:
    - the canonical trust manifest (`application/vnd.ai-catalog.trust-manifest.v1+json`)
-   - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`)
+   - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`), with the
+     Sigstore bundle from `cosign sign-blob --bundle` as a second layer
+     (`application/vnd.dev.sigstore.bundle.v0.3+json`)
    - the public key (`application/vnd.ai-catalog.cosign.public-key.v1`)
 
 Signatures live in the OCI layout as referrers, not embedded in the AI Catalog
-JSON. Use `oras discover` to inspect the referrer tree and `cosign verify-blob`
-to verify. See [`demo/trust-walkthrough.sh`](demo/trust-walkthrough.sh) for a
+JSON. Use `oras discover` to inspect the referrer tree and
+`cosign verify-blob --key cosign.pub --bundle <bundle> <payload>` to verify. A bundle
+signed without a transparency-log entry also needs `--insecure-ignore-tlog=true`. See [`demo/trust-walkthrough.sh`](demo/trust-walkthrough.sh) for a
 complete end-to-end example.
 
 ---
