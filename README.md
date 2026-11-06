@@ -525,15 +525,18 @@ When `--cosign-key` is supplied to `oci export-layout` or `oci push`, the CLI:
    (permanent and public); `--sigstore-services tsa` adds an RFC 3161 timestamp from the
    Sigstore timestamp authority, which receives only a hash. `--signing-config <path>`
    passes your own config, for example a private Rekor or timestamp authority.
-   Timestamps are kept in the Cosign bundle, which the layout does not store yet.
+   Log entries and timestamps are kept in the Cosign bundle stored with each signature.
 3. Attaches three OCI referrer artifacts to each signed entry:
    - the canonical trust manifest (`application/vnd.ai-catalog.trust-manifest.v1+json`)
-   - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`)
+   - the detached Cosign signature (`application/vnd.ai-catalog.cosign.signature.v1`), with the
+     Sigstore bundle from `cosign sign-blob --bundle` as a second layer
+     (`application/vnd.dev.sigstore.bundle.v0.3+json`)
    - the public key (`application/vnd.ai-catalog.cosign.public-key.v1`)
 
 Signatures live in the OCI layout as referrers, not embedded in the AI Catalog
-JSON. Use `oras discover` to inspect the referrer tree and `cosign verify-blob`
-to verify. See [`demo/trust-walkthrough.sh`](demo/trust-walkthrough.sh) for a
+JSON. Use `oras discover` to inspect the referrer tree and
+`cosign verify-blob --key cosign.pub --bundle <bundle> <payload>` to verify. A bundle
+signed without a transparency-log entry also needs `--insecure-ignore-tlog=true`. See [`demo/trust-walkthrough.sh`](demo/trust-walkthrough.sh) for a
 complete end-to-end example.
 
 ---
