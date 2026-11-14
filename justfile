@@ -8,7 +8,7 @@ default:
 set windows-shell := ["powershell", "-NoLogo", "-NoProfile", "-Command"]
 
 # renovate: datasource=github-releases depName=renovatebot/renovate versioning=semver
-RENOVATE_VERSION := "44.198.0"
+RENOVATE_VERSION := "44.222.0"
 
 BIN_DIR := justfile_directory() / ".bin"
 # The version is part of the path, so a bump installs fresh instead of
