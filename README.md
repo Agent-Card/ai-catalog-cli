@@ -86,6 +86,31 @@ cp SKILL.md ~/.agents/skills/ai-catalog-cli/
 `~/.agents/skills/` is read by Cursor, Copilot, VS Code, Codex, and Gemini CLI.
 For Claude Code, use `~/.claude/skills/` instead.
 
+### Install as a plugin
+
+The repository also provides a Claude-compatible plugin marketplace at
+`.claude-plugin/marketplace.json`. Its `ai-catalog-cli` plugin loads the existing
+skill from `plugins/ai-catalog-cli/skills/ai-catalog-cli/SKILL.md`. This is a
+generated copy of the canonical root `SKILL.md`: after editing the root file,
+run `just sync-plugin-skill`. CI runs the equivalent of `just check-plugin-skill`
+and rejects stale or missing copies. The plugin includes a portable Agent
+Plugins manifest and a Claude Code compatibility manifest.
+
+Installing the plugin does not install the `ai-catalog` binary; install it as
+described above.
+
+From a local checkout, register the marketplace and install the plugin:
+
+| Host | Register marketplace | Install plugin |
+|---|---|---|
+| Claude Code | `claude plugin marketplace add .` | `claude plugin install ai-catalog-cli@ai-catalog` |
+| GitHub Copilot CLI | `copilot plugin marketplace add .` | `copilot plugin install ai-catalog-cli@ai-catalog` |
+| Codex CLI | `codex plugin marketplace add .` | `codex plugin add ai-catalog-cli@ai-catalog` |
+
+After these files are published to the default branch, replace `.` with
+`Agent-Card/ai-catalog-cli` to register the marketplace directly from GitHub.
+Restart the host after installation to load the skill.
+
 ## Development
 
 ```sh

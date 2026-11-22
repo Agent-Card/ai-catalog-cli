@@ -38,6 +38,12 @@ lint:
 test:
 	cargo test
 
+sync-plugin-skill:
+	python scripts/sync_plugin_skill.py
+
+check-plugin-skill:
+	python scripts/sync_plugin_skill.py --check
+
 demo-oci-layout:
 	{{demo_oci_layout_command}}
 
