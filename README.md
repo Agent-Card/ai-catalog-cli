@@ -99,16 +99,18 @@ Plugins manifest and a Claude Code compatibility manifest.
 Installing the plugin does not install the `ai-catalog` binary; install it as
 described above.
 
-From a local checkout, register the marketplace and install the plugin:
+Register the marketplace directly from GitHub and install the plugin; no manual
+checkout is needed:
 
 | Host | Register marketplace | Install plugin |
 |---|---|---|
-| Claude Code | `claude plugin marketplace add .` | `claude plugin install ai-catalog-cli@ai-catalog` |
-| GitHub Copilot CLI | `copilot plugin marketplace add .` | `copilot plugin install ai-catalog-cli@ai-catalog` |
-| Codex CLI | `codex plugin marketplace add .` | `codex plugin add ai-catalog-cli@ai-catalog` |
+| Claude Code | `claude plugin marketplace add Agent-Card/ai-catalog-cli` | `claude plugin install ai-catalog-cli@ai-catalog` |
+| GitHub Copilot CLI | `copilot plugin marketplace add Agent-Card/ai-catalog-cli` | `copilot plugin install ai-catalog-cli@ai-catalog` |
+| Codex CLI | `codex plugin marketplace add Agent-Card/ai-catalog-cli` | `codex plugin add ai-catalog-cli@ai-catalog` |
 
-After these files are published to the default branch, replace `.` with
-`Agent-Card/ai-catalog-cli` to register the marketplace directly from GitHub.
+The `@ai-catalog` suffix is the marketplace name defined in `marketplace.json`,
+not the GitHub organization. For local testing, replace `Agent-Card/ai-catalog-cli`
+with `.` when registering the marketplace from a checkout.
 Restart the host after installation to load the skill.
 
 ## Development
