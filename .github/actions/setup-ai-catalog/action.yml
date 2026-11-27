@@ -1,0 +1,43 @@
+# Copyright AI-Catalog Contributors (https://github.com/Agent-Card/ai-catalog-cli)
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+name: Setup ai-catalog
+description: |
+  Install the ai-catalog CLI from a GitHub release, verify its SHA-256, and add it to PATH.
+author: Agent-Card
+branding:
+  icon: download
+  color: blue
+
+inputs:
+  version:
+    description: Release (for example 0.4.0 or v0.4.0), or "latest".
+    required: false
+    default: "0.4.0"
+  github_token:
+    description: Token used by the gh CLI to download the release. Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  ai_catalog_path:
+    description: Absolute path to the installed ai-catalog binary
+    value: ${{ steps.setup.outputs.ai_catalog_path }}
+  version:
+    description: Release tag that was installed, for example v0.4.0
+    value: ${{ steps.setup.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup ai-catalog
+      id: setup
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        DEST: ${{ runner.temp }}/ai-catalog-bin
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/install.sh"
+        "$DEST/ai-catalog" --version

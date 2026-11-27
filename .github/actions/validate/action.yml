@@ -1,0 +1,54 @@
+# Copyright AI-Catalog Contributors (https://github.com/Agent-Card/ai-catalog-cli)
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+name: Validate AI Catalog
+description: |
+  Validate an AI Catalog document with the ai-catalog CLI, annotate each problem,
+  and write a step summary. Requires ai-catalog on PATH (see setup-ai-catalog).
+author: Agent-Card
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  path:
+    description: Path to the catalog JSON file, relative to the workspace. Set this or url.
+    required: false
+    default: ""
+  url:
+    description: URL of the catalog document, for example https://example.com/.well-known/ai-catalog.json. Set this or path.
+    required: false
+    default: ""
+  fail_on_invalid:
+    description: Fail the step when the catalog is invalid. Set to "false" to only report.
+    required: false
+    default: "true"
+  ai_catalog_path:
+    description: Optional absolute path to the ai-catalog binary. Defaults to PATH lookup.
+    required: false
+    default: ""
+
+outputs:
+  valid:
+    description: '"true" when the catalog is valid, otherwise "false"'
+    value: ${{ steps.validate.outputs.valid }}
+  conformance_level:
+    description: Conformance level reported by the CLI (minimal, discoverable, or none)
+    value: ${{ steps.validate.outputs.conformance_level }}
+  report:
+    description: Path to the JSON report written by ai-catalog validate --json
+    value: ${{ steps.validate.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate catalog
+      id: validate
+      shell: bash
+      env:
+        CATALOG_PATH: ${{ inputs.path }}
+        CATALOG_URL: ${{ inputs.url }}
+        FAIL_ON_INVALID: ${{ inputs.fail_on_invalid }}
+        AI_CATALOG_PATH: ${{ inputs.ai_catalog_path }}
+      run: bash "$GITHUB_ACTION_PATH/validate.sh"
