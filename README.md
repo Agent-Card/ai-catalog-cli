@@ -151,6 +151,51 @@ than the message. `code` is `null` when the input could not be parsed.
 
 ---
 
+### Validate in CI
+
+The repository ships composite GitHub Actions under
+[`.github/actions/`](.github/actions), one per job, in the same layout as the
+Directory's `dirctl` actions. `setup-ai-catalog` installs a released
+`ai-catalog` (checksum-verified) and adds it to `PATH`; `validate` runs
+`ai-catalog validate`, reports each problem as an annotation on the run, and
+writes a summary table:
+
+```yaml
+- uses: actions/checkout@v7
+- uses: Agent-Card/ai-catalog-cli/.github/actions/setup-ai-catalog@main
+- uses: Agent-Card/ai-catalog-cli/.github/actions/validate@main
+  with:
+    path: .well-known/ai-catalog.json
+```
+
+To validate a catalog that is already published, pass `url` instead of `path`.
+Pin to a commit SHA if your policy requires it.
+
+**`setup-ai-catalog`**
+
+| Input | Default | Description |
+|---|---|---|
+| `version` | `0.4.0` | Release to install, or `latest`. |
+
+Outputs: `ai_catalog_path` (the binary) and `version` (the installed tag).
+
+**`validate`**
+
+| Input | Default | Description |
+|---|---|---|
+| `path` | | Catalog file, relative to the workspace. Set `path` or `url`. |
+| `url` | | Catalog URL, for example `https://example.com/.well-known/ai-catalog.json`. |
+| `fail_on_invalid` | `true` | Set to `false` to report without failing the step. |
+| `ai_catalog_path` | | Binary to use. Defaults to `ai-catalog` on `PATH`. |
+
+Outputs: `valid` (`true` or `false`), `conformance_level` (`minimal`,
+`discoverable`, or `none`) and `report` (path to the JSON report).
+
+The actions run on Linux and macOS runners (x64 and arm64) and need `curl` and
+`jq`, which the GitHub-hosted runners include.
+
+---
+
 ### `verify`
 
 Validates a catalog and verifies the signatures and artifacts of its root entries, using
