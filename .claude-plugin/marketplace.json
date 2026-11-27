@@ -1,0 +1,21 @@
+{
+  "name": "ai-catalog",
+  "owner": {
+    "name": "AI Catalog Contributors"
+  },
+  "metadata": {
+    "description": "Skills for discovering and using AI Catalog resources."
+  },
+  "plugins": [
+    {
+      "name": "ai-catalog-cli",
+      "description": "Discover, inspect, validate, and install AI resources with the AI Catalog CLI.",
+      "source": "./plugins/ai-catalog-cli",
+      "category": "Developer tools",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      }
+    }
+  ]
+}
