@@ -3,12 +3,6 @@
 # Copyright AGNTCY Contributors (https://github.com/agntcy)
 # SPDX-License-Identifier: Apache-2.0
 
-# Validate a catalog with the installed ai-catalog CLI and report the result
-# as GitHub annotations, a step summary, and step outputs.
-#
-# Env: CATALOG_PATH or CATALOG_URL (exactly one), FAIL_ON_INVALID (true|false),
-# AI_CATALOG_PATH (optional, defaults to ai-catalog on PATH), RUNNER_TEMP,
-# GITHUB_OUTPUT, GITHUB_STEP_SUMMARY (the last two are optional).
 set -euo pipefail
 
 path="${CATALOG_PATH:-}"
@@ -41,8 +35,7 @@ else
   annotation_file="$path"
 fi
 
-# validate exits 1 for an invalid catalog; the JSON report is on stdout either
-# way, so read the report rather than the exit code.
+# An invalid catalog exits 1 but still writes the JSON report, so read the report.
 report="$tmp/ai-catalog-report.json"
 set +e
 "$bin" validate --json "$path" > "$report"
@@ -61,13 +54,12 @@ level="$(jq -r '.conformanceLevel // "none"' "$report")"
   echo "report=$report"
 } >> "$out"
 
-# Workflow-command escaping for annotation data and properties.
 annotate() {
   severity="$1"
   jq -r --arg sev "$severity" --arg file "$annotation_file" '
     def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
     def prop: esc | gsub(":"; "%3A") | gsub(","; "%2C");
-    (if $sev == "error" then .errors else .warnings end)[]
+    ((if $sev == "error" then .errors else .warnings end) // [])[]
     | "::\($sev) "
       + (if $file != "" then "file=\($file | prop)," else "" end)
       + "title=\((.code // "invalid-input") | prop)::\(((.path // "") + ": " + .message) | esc)"
@@ -82,14 +74,14 @@ annotate warning
   echo "- Source: \`$source_label\`"
   echo "- Valid: **$valid**"
   echo "- Conformance level: **$level**"
-  if [ "$(jq '(.errors | length) + (.warnings | length)' "$report")" -gt 0 ]; then
+  if [ "$(jq '[(.errors // [])[], (.warnings // [])[]] | length' "$report")" -gt 0 ]; then
     echo
     echo "| Severity | Code | Path | Message |"
     echo "|---|---|---|---|"
     jq -r '
       def cell: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
-      (.errors[] | ["error", (.code // "-"), (.path // "-"), .message]),
-      (.warnings[] | ["warning", (.code // "-"), (.path // "-"), .message])
+      ((.errors // [])[] | ["error", (.code // "-"), (.path // "-"), .message]),
+      ((.warnings // [])[] | ["warning", (.code // "-"), (.path // "-"), .message])
       | "| " + (map(cell) | join(" | ")) + " |"
     ' "$report"
   fi

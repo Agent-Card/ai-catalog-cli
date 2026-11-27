@@ -3,19 +3,13 @@
 # Copyright AGNTCY Contributors (https://github.com/agntcy)
 # SPDX-License-Identifier: Apache-2.0
 
-# Download an ai-catalog release, verify its SHA-256, add it to PATH, and expose
-# the binary path and release tag as step outputs.
-#
-# Env: VERSION (e.g. 0.4.0, v0.4.0, or "latest"), RUNNER_OS, RUNNER_ARCH, DEST,
-# GITHUB_OUTPUT and GITHUB_PATH (both optional, for local runs).
 set -euo pipefail
 
 repo="Agent-Card/ai-catalog-cli"
 version="${VERSION:-latest}"
 
 if [ "$version" = "latest" ]; then
-  url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")"
-  tag="${url##*/}"
+  tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
 else
   tag="v${version#v}"
 fi
@@ -30,9 +24,8 @@ esac
 
 dest="${DEST:?DEST is required}"
 mkdir -p "$dest"
-base="https://github.com/$repo/releases/download/$tag"
-curl -fsSL --retry 3 --max-time 120 -o "$dest/$name.tar.gz" "$base/$name.tar.gz"
-curl -fsSL --retry 3 --max-time 120 -o "$dest/$name.sha256" "$base/$name.sha256"
+gh release download "$tag" --repo "$repo" --dir "$dest" --clobber \
+  --pattern "$name.tar.gz" --pattern "$name.sha256"
 (cd "$dest" && shasum -a 256 -c "$name.sha256" >&2)
 tar -xzf "$dest/$name.tar.gz" -C "$dest"
 chmod +x "$dest/ai-catalog"

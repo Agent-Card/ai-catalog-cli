@@ -176,6 +176,7 @@ Pin to a commit SHA if your policy requires it.
 | Input | Default | Description |
 |---|---|---|
 | `version` | `0.4.0` | Release to install, or `latest`. |
+| `github_token` | workflow token | Token the `gh` CLI uses to download the release. |
 
 Outputs: `ai_catalog_path` (the binary) and `version` (the installed tag).
 
@@ -191,8 +192,8 @@ Outputs: `ai_catalog_path` (the binary) and `version` (the installed tag).
 Outputs: `valid` (`true` or `false`), `conformance_level` (`minimal`,
 `discoverable`, or `none`) and `report` (path to the JSON report).
 
-The actions run on Linux and macOS runners (x64 and arm64) and need `curl` and
-`jq`, which the GitHub-hosted runners include.
+The actions run on Linux and macOS runners (x64 and arm64) and need the `gh` CLI
+and `jq`, which the GitHub-hosted runners include.
 
 ---
 

@@ -15,6 +15,10 @@ inputs:
     description: Release (for example 0.4.0 or v0.4.0), or "latest".
     required: false
     default: "0.4.0"
+  github_token:
+    description: Token used by the gh CLI to download the release. Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   ai_catalog_path:
@@ -33,6 +37,7 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
         DEST: ${{ runner.temp }}/ai-catalog-bin
+        GH_TOKEN: ${{ inputs.github_token }}
       run: |
         bash "$GITHUB_ACTION_PATH/install.sh"
         "$DEST/ai-catalog" --version
