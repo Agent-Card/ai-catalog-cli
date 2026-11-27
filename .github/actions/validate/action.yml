@@ -51,4 +51,4 @@ runs:
         CATALOG_URL: ${{ inputs.url }}
         FAIL_ON_INVALID: ${{ inputs.fail_on_invalid }}
         AI_CATALOG_PATH: ${{ inputs.ai_catalog_path }}
-      run: bash "${{ github.action_path }}/validate.sh"
+      run: bash "$GITHUB_ACTION_PATH/validate.sh"

@@ -34,5 +34,5 @@ runs:
         VERSION: ${{ inputs.version }}
         DEST: ${{ runner.temp }}/ai-catalog-bin
       run: |
-        bash "${{ github.action_path }}/install.sh"
-        "${{ runner.temp }}/ai-catalog-bin/ai-catalog" --version
+        bash "$GITHUB_ACTION_PATH/install.sh"
+        "$DEST/ai-catalog" --version
